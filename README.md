@@ -1,11 +1,9 @@
 # Prophet_Alpha_Farm
 
 ## Overview
-
 This project evaluates Meta's Prophet library for stock price prediction. It implements an automated pipeline that collects stock price data, trains a Prophet model through hyperparameter optimization, and generates five-day price predictions.
 
 ## Project Structure
-
 The repository is organize into four main directories:
 
 ### Data
