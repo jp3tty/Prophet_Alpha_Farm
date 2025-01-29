@@ -1,0 +1,2 @@
+changepoint_prior_scale,seasonality_prior_scale,holidays_prior_scale,seasonality_mode,interval_width,growth,n_changepoints,daily_seasonality,weekly_seasonality,yearly_seasonality,mse
+0.5,100.0,0.01,multiplicative,0.6,linear,50,True,True,True,13.496738300281905
