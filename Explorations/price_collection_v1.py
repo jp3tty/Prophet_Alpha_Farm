@@ -4,6 +4,17 @@ from datetime import datetime, timedelta
 import os
 import time
 
+# List of ticker symbols to analyze
+TICKER_SYMBOLS = [
+    'AAPL',  # Apple
+    'GOOGL', # Google
+    'MSFT',  # Microsoft
+    'AMZN',  # Amazon
+    'EGO',   # Eldorado Gold Corp
+    'STM',   # STMicroelectronics NV
+    # Add more tickers here as needed
+]
+
 def get_stock_prices(symbol, period='1y'):
     """
     Fetch historical stock prices for a given symbol.
@@ -75,37 +86,11 @@ def save_to_csv(price_data, symbol):
         print(f"Error saving data for {symbol}: {str(e)}")
         return False
 
-# Replace the TICKER_SYMBOLS list with a function to get user input
-def get_user_symbols():
-    """
-    Prompt user to enter stock symbols they want to analyze.
-    Returns a list of uppercase stock symbols.
-    """
-    print("\nEnter stock symbols one at a time.")
-    print("Press Enter without any symbol when you're done.")
-    
-    symbols = []
-    while True:
-        symbol = input("Enter stock symbol (or press Enter to finish): ").strip().upper()
-        if not symbol:  # If user just pressed Enter
-            if not symbols:  # If no symbols were entered
-                print("Please enter at least one symbol.")
-                continue
-            break
-        symbols.append(symbol)
-        print(f"Added {symbol}. Current list: {', '.join(symbols)}")
-    
-    return symbols
-
 def main():
-    print("Welcome to the stock price data collector!")
-    
-    # Get symbols from user instead of using predefined list
-    ticker_symbols = get_user_symbols()
-    print(f"\nStarting price data collection for {len(ticker_symbols)} symbols...")
+    print(f"Starting price data collection for {len(TICKER_SYMBOLS)} symbols...")
     successful_saves = 0
     
-    for symbol in ticker_symbols:
+    for symbol in TICKER_SYMBOLS:
         print(f"\nProcessing {symbol}...")
         
         # Get the price data
@@ -119,7 +104,7 @@ def main():
         time.sleep(1)
     
     print(f"\nPrice data collection completed!")
-    print(f"Successfully saved data for {successful_saves} out of {len(ticker_symbols)} symbols")
+    print(f"Successfully saved data for {successful_saves} out of {len(TICKER_SYMBOLS)} symbols")
     
     # List all saved files
     if successful_saves > 0:

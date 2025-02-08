@@ -56,19 +56,61 @@ class StockPredictor:
 def main():
     try:
         # Path to your saved model
-        model_path = "../Modeling/forecast_output/prophet_model_20250122_133107_7cd63455.pkl"  # Update with your model filename
+        # Get the latest .pkl file for each stock prefix from the forecast output directory
+        forecast_dir = "../Modeling/forecast_output"
+        latest_models = {}
         
-        # Initialize predictor
-        predictor = StockPredictor(model_path)
+        # Walk through all directories
+        for root, dirs, files in os.walk(forecast_dir):
+            for file in files:
+                if file.endswith('.pkl'):
+                    # Extract stock prefix (e.g., 'EGO' from 'EGO_Model13.pkl')
+                    stock_prefix = file.split('_')[0]
+                    full_path = os.path.join(root, file)
+                    
+                    # Update if this is the first or a later model for this stock
+                    if stock_prefix not in latest_models or \
+                       os.path.getctime(full_path) > os.path.getctime(latest_models[stock_prefix]):
+                        latest_models[stock_prefix] = full_path
         
-        # Load model
-        predictor.load_model()
+        if not latest_models:
+            raise FileNotFoundError("No .pkl files found in forecast output directory")
+            
+        # Create output directory for predictions if it doesn't exist
+        predictions_dir = "predictions_output"
+        os.makedirs(predictions_dir, exist_ok=True)
         
-        # Make predictions
-        predictions = predictor.make_predictions(days=5)
+        # Initialize a dictionary to store all predictions
+        all_predictions = {}
+        first_dates = None
         
-        # Print results
-        predictor.print_predictions(predictions)
+        # Process predictions for each stock's latest model
+        for stock_prefix, model_path in latest_models.items():
+            print(f"\nProcessing predictions for {stock_prefix}:")
+            
+            predictor = StockPredictor(model_path)
+            predictor.load_model()
+            predictions = predictor.make_predictions(days=5)
+            
+            # Store the dates if this is the first stock
+            if first_dates is None:
+                first_dates = predictions['Date']
+                all_predictions['Date'] = first_dates
+            
+            # Add this stock's predictions to the combined dictionary
+            all_predictions[stock_prefix] = predictions['Predicted_Price']
+            
+            # Print results
+            predictor.print_predictions(predictions)
+        
+        # Create combined DataFrame
+        combined_df = pd.DataFrame(all_predictions)
+        
+        # Save to CSV with current date in filename
+        current_date = datetime.now().strftime('%Y%m%d')
+        output_file = os.path.join(predictions_dir, f"{current_date}_predictions.csv")
+        combined_df.to_csv(output_file, index=False)
+        print(f"\nAll predictions saved to {output_file}")
         
         return 0
     except Exception as e:

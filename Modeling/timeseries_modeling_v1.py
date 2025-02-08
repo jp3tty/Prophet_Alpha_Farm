@@ -21,29 +21,25 @@ class StockForecaster:
         self.forecast = None
         self.hyperparameter_test_results = []
         self.current_best_mse = float('inf')
-        self.model_counter = 0
         
-        # Extract stock name from csv path
-        self.stock_name = os.path.splitext(os.path.basename(csv_path))[0].split('_')[0]
+        # Create single output directory
+        self.output_dir = 'forecast_output'
+        if not os.path.exists(self.output_dir):
+            os.makedirs(self.output_dir)
         
-        # Use output directory passed from main() instead of creating new one
-        self.output_dir = None  # Will be set when running the script
-        
-        # Rest of initialization remains the same
+        # Rest of the initialization code remains the same
         self.param_grid = {
-            'changepoint_prior_scale': [0.5, 1.2, 0.6, 0.75, 0.9, 1, 1.2],
-            'seasonality_prior_scale': [2, 7, 3, 5, 6, 7],
+            'changepoint_prior_scale': [0.5, 0.6, 0.75, 0.9, 1, 1.2],
+            'seasonality_prior_scale': [2, 3, 5, 6, 7],
             'holidays_prior_scale': [0.01],
             'seasonality_mode': ['multiplicative'],
             'interval_width': [0.05, 0.1, 0.15],
             'growth': ['linear'],
-            'n_changepoints': [35, 70, 40, 45, 50, 55, 60, 65, 70],
+            'n_changepoints': [35, 40, 45, 50, 55, 60, 65, 70],
             'daily_seasonality': [True],
-            'weekly_seasonality': [False],
+            'weekly_seasonality': [True],
             'yearly_seasonality': [True]
-
         }
-
 
     def prepare_data(self):
         """Read and prepare the stock data for Prophet."""
@@ -58,95 +54,92 @@ class StockForecaster:
         return self.df
 
     def calculate_mse(self, forecast_df):
-            """Calculate Mean Squared Error for the forecast."""
-            try:
-                # Perform merge
-                comparison_df = forecast_df.merge(
-                    self.df[['ds', 'y']], 
-                    on='ds', 
-                    how='inner'
-                )
-                
-                # Calculate MSE
-                mse = mean_squared_error(
-                    comparison_df['y'],
-                    comparison_df['yhat']
-                )
-                                
-                print(f"MSE calculated successfully: {mse:.2f}%")
-                return mse
-                
-            except Exception as e:
-                print(f"\nError in calculate_mse: {str(e)}")
-                print(f"Error type: {type(e)}")
-                import traceback
-                print(f"Full traceback: {traceback.format_exc()}")
-                return None
-
-    def _get_model_filename(self):
-        """Generate a consistent filename for model files."""
-        current_date = datetime.now().strftime("%Y%m%d")
-        return f"{self.stock_name}_Champion_{current_date}"
+        """Calculate Mean Squared Error for the forecast."""
+        try:
+            # Print initial dataframe information
+            print("\nCalculate MSE Debug Info:")
+            print("Forecast DF Head:")
+            print(forecast_df.head())
+            print("\nOriginal DF Head:")
+            print(self.df.head())
+            
+            # Check for required columns
+            print("\nChecking columns...")
+            forecast_cols = forecast_df.columns.tolist()
+            df_cols = self.df.columns.tolist()
+            print(f"Forecast columns: {forecast_cols}")
+            print(f"Original columns: {df_cols}")
+            
+            # Perform merge
+            print("\nPerforming merge...")
+            comparison_df = forecast_df.merge(
+                self.df[['ds', 'y']], 
+                on='ds', 
+                how='inner'
+            )
+            
+            print("\nComparison DF Head:")
+            print(comparison_df.head())
+            print(f"Comparison DF Shape: {comparison_df.shape}")
+            
+            # Calculate MSE
+            print("\nCalculating MSE...")
+            mse = mean_squared_error(
+                comparison_df['y'],
+                comparison_df['yhat']
+            )
+            
+            print(f"MSE calculated successfully: {mse}")
+            return mse
+            
+        except Exception as e:
+            print(f"\nError in calculate_mse: {str(e)}")
+            print(f"Error type: {type(e)}")
+            import traceback
+            print(f"Full traceback: {traceback.format_exc()}")
+            return None
 
     def save_model_plot(self, model_id, mse, params):
         """Save the model's forecast plot as PNG."""
         if self.model is None or self.forecast is None:
             return
         
-        # Get filename using current date
-        filename = self._get_model_filename()
-        current_date = datetime.now().strftime("%Y-%m-%d")
-        
-        # Create key parameters string
-        key_params = ", ".join([f"{k}: {v}" for k, v in params.items() 
-                              if k in ['changepoint_prior_scale', 'seasonality_mode', 'growth']])
-        
-        # Create the plot using Prophet's plot_plotly but only get the first figure
+        # Create the plot
         fig = plot_plotly(self.model, self.forecast, xlabel='Date', ylabel='Stock Price ($)')
         
-        # Keep only the first trace group (main forecast plot)
-        fig.data = fig.data[:4]  # This keeps only the main forecast traces
-        
-        # Update layout with stock name, date, and parameters in title
+        # Update layout
         fig.update_layout(
-            title={
-                'text': f'<span style="font-size: 24px">{self.stock_name} Stock Price Forecast - {current_date}</span><br>' +
-                       f'<span style="font-size: 12px">Champion Model (MSE: {mse:.4f})</span><br>', # +
-                    #    f'<span style="font-size: 8px">Parameters: {key_params}</span>',
-                'x': 0.5,
-                'y': 0.95,
-                'xanchor': 'center',
-                'yanchor': 'top'
-            },
-            showlegend=True
+            title=f'Stock Price Forecast (Model: {model_id}, MSE: {mse:.4f})',
+            showlegend=True,
+            annotations=[
+                dict(
+                    text=f"MSE: {mse:.4f}\nKey Parameters:\n" + \
+                        "\n".join([f"{k}: {v}" for k, v in params.items() if k in ['changepoint_prior_scale', 'seasonality_mode', 'growth']]),
+                    xref="paper",
+                    yref="paper",
+                    x=1,
+                    y=0,
+                    showarrow=False,
+                    align="right",
+                    bgcolor="rgba(255, 255, 255, 0.8)"
+                )
+            ]
         )
-            
-        # Save new champion plot
-        plot_path = os.path.join(self.output_dir, f'{filename}.png')
+        
+        # Save plot
+        plot_path = os.path.join(self.output_dir, f'forecast_plot_{model_id}.png')
         fig.write_image(plot_path)
-        print(f"Champion plot saved: {plot_path}")
+        print(f"Plot saved: {plot_path}")
 
     def save_model(self, model_id):
         """Save the Prophet model to disk."""
         if self.model is None:
             return
         
-        # Use same filename as plot
-        filename = self._get_model_filename()
-        
-        model_path = os.path.join(self.output_dir, f'{filename}.pkl')
+        model_path = os.path.join(self.output_dir, f'prophet_model_{model_id}.pkl')
         with open(model_path, 'wb') as f:
             pickle.dump(self.model, f)
         print(f"Model saved: {model_path}")
-        
-        # Remove any existing champion files for this stock AFTER saving both new files
-        for ext in ['.png', '.pkl']:
-            existing_files = [f for f in os.listdir(self.output_dir) 
-                            if f.startswith(f"{self.stock_name}_Champion_") 
-                            and f.endswith(ext)
-                            and not f.endswith(f"_{datetime.now().strftime('%Y%m%d')}{ext}")]  # Don't delete the files we just created
-            for old_file in existing_files:
-                os.remove(os.path.join(self.output_dir, old_file))
 
     def test_hyperparameters(self, baseline_mse, output_file='hyperparameter_results.csv'):
         """Test different hyperparameter combinations and log results that beat the baseline."""
@@ -214,8 +207,8 @@ class StockForecaster:
                             self.current_best_mse = mse
                             
                             # Save the model and its plot
-                            self.save_model_plot(model_id, mse, params)
                             self.save_model(model_id)
+                            self.save_model_plot(model_id, mse, params)
                         
                     except Exception as e:
                         print(f"\nError with parameters {params}:")
@@ -254,31 +247,31 @@ class StockForecaster:
         self.model.fit(self.df)
         return self.model
 
-    def make_predictions(self, periods=5):  # Changed default to 5
-            """Generate predictions for the specified number of periods."""
-            if self.model is None:
-                raise ValueError("Model not trained. Call train_model() first.")
-            
-            # Make future dataframe
-            future = self.model.make_future_dataframe(periods=periods)
-            
-            # Add cap and floor if using logistic growth
-            if self.model.growth == 'logistic':
-                future['cap'] = self.df['cap'].max()
-                future['floor'] = self.df['floor'].min()
-            
-            # Generate forecast
-            self.forecast = self.model.predict(future)
-            return self.forecast
+    def make_predictions(self, periods=3):
+        """Generate predictions for the specified number of periods."""
+        if self.model is None:
+            raise ValueError("Model not trained. Call train_model() first.")
+        
+        # Make future dataframe
+        future = self.model.make_future_dataframe(periods=periods)
+        
+        # Add cap and floor if using logistic growth
+        if self.model.growth == 'logistic':
+            future['cap'] = self.df['cap'].max()
+            future['floor'] = self.df['floor'].min()
+        
+        # Generate forecast
+        self.forecast = self.model.predict(future)
+        return self.forecast
 
-    def print_forecast_results(self, periods=5):  # Changed default to 5
+    def print_forecast_results(self, periods=3):
         """Print formatted forecast results."""
         if self.forecast is None:
             raise ValueError("No forecast available. Call make_predictions() first.")
         
         forecast_subset = self.forecast.tail(periods)
         
-        print(f"\nForecast for the next {periods} days:")
+        print("\nForecast for the next {periods} days:")
         print("Date                      Predicted Price    Lower Bound    Upper Bound")
         print("-" * 75)
         
@@ -287,7 +280,7 @@ class StockForecaster:
             yhat = row['yhat']
             yhat_lower = row['yhat_lower']
             yhat_upper = row['yhat_upper']
-            print(f"{date}           ${yhat:.2f}              ${yhat_lower:.2f}          ${yhat_upper:.2f}")
+            print(f"{date}           ${yhat:.2f}          ${yhat_lower:.2f}        ${yhat_upper:.2f}")
 
     def create_interactive_plots(self):
         """Generate and display interactive plots for the forecast."""
@@ -349,9 +342,8 @@ class StockForecaster:
                 self.model = Prophet()
                 self.model.fit(self.df)
                 
-            # Changed to explicitly specify 5 periods
-            self.make_predictions(periods=5)
-            self.print_forecast_results(periods=5)
+            self.make_predictions()
+            self.print_forecast_results()
             self.create_interactive_plots()
             return self.model, self.forecast
             
@@ -362,81 +354,37 @@ class StockForecaster:
 def main():
     """Main entry point of the program."""
     try:
-        # Create single timestamped directory for this run
-        output_base = 'forecast_output'
-        if not os.path.exists(output_base):
-            os.makedirs(output_base)
+        # Initialize forecaster with your data path
+        forecaster = StockForecaster('../Data/price_data/MSFT_prices.csv')
         
-        timestamp = datetime.now().strftime("%m_%d_%Y_%H%M")
-        output_dir = os.path.join(output_base, timestamp)
-        if not os.path.exists(output_dir):
-            os.makedirs(output_dir)
+        # Load and print data sample
+        forecaster.prepare_data()
+        print("\nInitial data sample:")
+        print(forecaster.df.head())
+        print("\nData shape:", forecaster.df.shape)
+        print("\nData columns:", forecaster.df.columns.tolist())
+
+        # Set baseline MSE
+        baseline_mse = 15  # Set your initial baseline MSE here
+        print(f"\nStarting with baseline MSE: {baseline_mse}")
+
+        # Continue with test...
+        print("\nTesting hyperparameters...")
+        forecaster.test_hyperparameters(baseline_mse, 'hyperparameter_results.csv')
         
-        # Get all CSV files in the price_data directory
-        price_data_dir = '../Data/price_data'
-        csv_files = [f for f in os.listdir(price_data_dir) if f.endswith('.csv')]
+        # Get and print best parameters
+        best_params = forecaster.get_best_parameters()
+        print("\nBest hyperparameters found:")
+        print(f"Parameters: {best_params}")
         
-        # Initialize list to store all results
-        all_results = []
+        # Run full analysis with best parameters
+        print("\nRunning full analysis with best parameters...")
+        model, forecast = forecaster.run_full_analysis(use_best_params=True)
         
-        print(f"\nFound {len(csv_files)} CSV files to process")
-        
-        # Process each CSV file
-        for csv_file in csv_files:
-            print(f"\nProcessing {csv_file}...")
-            
-            # Initialize forecaster for current file
-            file_path = os.path.join(price_data_dir, csv_file)
-            forecaster = StockForecaster(file_path)
-            forecaster.output_dir = output_dir  # Set the output directory
-            
-            # Load and print data sample
-            forecaster.prepare_data()
-            print("\nData shape:", forecaster.df.shape)
-            
-            # Set baseline MSE
-            baseline_mse = 15  # Set your initial baseline MSE here
-            print(f"\nStarting with baseline MSE: {baseline_mse}")
-            
-            try:
-                # Test hyperparameters
-                print("\nTesting hyperparameters...")
-                results = forecaster.test_hyperparameters(baseline_mse)
-                
-                # Get best parameters
-                best_params = forecaster.get_best_parameters()
-                
-                # Add stock name to results
-                stock_name = os.path.splitext(csv_file)[0].split('_')[0]
-                best_params['stock'] = stock_name
-                
-                # Add to all results
-                all_results.append(best_params)
-                
-                # Run full analysis with best parameters
-                print("\nRunning full analysis with best parameters...")
-                forecaster.run_full_analysis(use_best_params=True)
-                
-            except Exception as e:
-                print(f"Error processing {csv_file}: {str(e)}")
-                continue
-        
-        # Save consolidated results in the same timestamped directory
-        if all_results:
-            results_filename = 'forecast_results.csv'
-            results_path = os.path.join(output_dir, results_filename)
-            
-            # Convert results to DataFrame and save
-            results_df = pd.DataFrame(all_results)
-            results_df.to_csv(results_path, index=False)
-            print(f"\nConsolidated results saved to: {results_path}")
-            
         return 0  # Success
-    
     except Exception as e:
-        print(f"An error occurred in main: {str(e)}")
+        print(f"An error occurred: {str(e)}")
         return 1  # Error
-    
 
 if __name__ == "__main__":
     exit_code = main()
