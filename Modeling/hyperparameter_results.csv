@@ -1,0 +1,10 @@
+model_id,changepoint_prior_scale,seasonality_prior_scale,holidays_prior_scale,seasonality_mode,interval_width,growth,n_changepoints,daily_seasonality,weekly_seasonality,yearly_seasonality,mse
+20250207_172947_08b5e20e,0.5,2,0.01,multiplicative,0.05,linear,35,True,False,True,0.42721308895254656
+20250207_172948_33df341c,0.5,2,0.01,multiplicative,0.05,linear,70,True,False,True,0.4271847749694787
+20250207_172949_0c9bee1b,0.5,2,0.01,multiplicative,0.05,linear,60,True,False,True,0.42717132925500423
+20250207_172950_20a7a78e,0.5,2,0.01,multiplicative,0.05,linear,65,True,False,True,0.4271413180114993
+20250207_173006_edde5d66,0.5,3,0.01,multiplicative,0.05,linear,65,True,False,True,0.42713052127185186
+20250207_173036_94fdbfbd,1.2,2,0.01,multiplicative,0.05,linear,35,True,False,True,0.26869553404285795
+20250207_173037_ab72a3f2,1.2,2,0.01,multiplicative,0.05,linear,70,True,False,True,0.23456425239953704
+20250207_173041_7169f44f,1.2,2,0.01,multiplicative,0.05,linear,60,True,False,True,0.18230281296414874
+20250207_173101_10103205,1.2,7,0.01,multiplicative,0.05,linear,60,True,False,True,0.1752995415685624
