@@ -1,0 +1,2 @@
+model_id,changepoint_prior_scale,seasonality_prior_scale,holidays_prior_scale,seasonality_mode,interval_width,growth,n_changepoints,daily_seasonality,weekly_seasonality,yearly_seasonality,mse,stock
+20250312_213721_e0ee5466,1.2,5,0.01,multiplicative,0.05,linear,65,True,False,True,5.64263020708062,AAPL

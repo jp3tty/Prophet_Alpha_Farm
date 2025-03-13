@@ -11,6 +11,7 @@ from tqdm import tqdm
 import os
 import pickle
 import uuid
+from statsmodels.tsa.statespace.sarimax import SARIMAX
 
 class StockForecaster:
     def __init__(self, csv_path):
@@ -44,6 +45,13 @@ class StockForecaster:
 
         }
 
+        # Add model storage for comparisons
+        self.models = {
+            'Prophet': None,
+            'SARIMA': None,
+            'Theta': None
+        }
+        self.forecasts = {}
 
     def prepare_data(self):
         """Read and prepare the stock data for Prophet."""
@@ -326,34 +334,252 @@ class StockForecaster:
         )
         fig_dist.show()
 
+    def train_sarima_model(self, periods=5):
+        """Train and forecast using SARIMA model with parameter grid search."""
+        try:
+            # Define parameter grid
+            param_grid = {
+                'p': [1, 2, 3],
+                'd': [1],  # Usually 1 for stock prices
+                'q': [1, 2],
+                'P': [0, 1],
+                'D': [0, 1],
+                'Q': [0, 1],
+                's': [5, 20]  # Weekly and monthly seasonality
+            }
+            
+            best_aic = float('inf')
+            best_params = None
+            best_model = None
+            
+            # Grid search
+            for p in param_grid['p']:
+                for d in param_grid['d']:
+                    for q in param_grid['q']:
+                        for P in param_grid['P']:
+                            for D in param_grid['D']:
+                                for Q in param_grid['Q']:
+                                    for s in param_grid['s']:
+                                        try:
+                                            # Initialize and train SARIMA model
+                                            model = SARIMAX(
+                                                self.df['y'],
+                                                order=(p, d, q),
+                                                seasonal_order=(P, D, Q, s)
+                                            )
+                                            results = model.fit(disp=False)
+                                            
+                                            # Check if this model is better
+                                            if results.aic < best_aic:
+                                                best_aic = results.aic
+                                                best_params = {
+                                                    'p': p, 'd': d, 'q': q,
+                                                    'P': P, 'D': D, 'Q': Q, 's': s
+                                                }
+                                                best_model = results
+                                                
+                                        except Exception as e:
+                                            continue
+            
+            print(f"\nBest SARIMA parameters found: {best_params}")
+            print(f"AIC: {best_aic}")
+            
+            # Generate forecast with best model
+            forecast = best_model.forecast(periods)
+            dates = pd.date_range(
+                start=self.df['ds'].iloc[-1] + timedelta(days=1),
+                periods=periods,
+                freq='D'
+            )
+            
+            # Store results
+            self.models['SARIMA'] = best_model
+            self.forecasts['SARIMA'] = pd.DataFrame({
+                'ds': dates,
+                'yhat': forecast,
+                'model': 'SARIMA'
+            })
+            
+            return self.forecasts['SARIMA']
+            
+        except Exception as e:
+            print(f"Error in SARIMA modeling: {str(e)}")
+            return None
+
+    def train_theta_model(self, periods=5):
+        """Train and forecast using Theta model with parameter tuning."""
+        try:
+            # Define parameter grid
+            param_grid = {
+                'theta': [0.5, 1.0, 1.5, 2.0, 2.5],
+                'seasonality_period': [5, 20],  # weekly and monthly
+                'decomposition_type': ['multiplicative', 'additive']
+            }
+            
+            best_mse = float('inf')
+            best_params = None
+            best_forecast = None
+            
+            values = self.df['y'].values
+            n = len(values)
+            
+            # Grid search
+            for theta in param_grid['theta']:
+                for season_period in param_grid['seasonality_period']:
+                    for decomp_type in param_grid['decomposition_type']:
+                        try:
+                            # Decompose time series
+                            if decomp_type == 'multiplicative':
+                                seasonal = values / np.mean(values)
+                            else:  # additive
+                                seasonal = values - np.mean(values)
+                            
+                            # Calculate trend
+                            X = np.arange(n).reshape(-1, 1)
+                            y = values.reshape(-1, 1)
+                            trend = np.linalg.inv(X.T.dot(X)).dot(X.T).dot(y)
+                            
+                            # Apply theta coefficient
+                            theta_line = theta * trend
+                            
+                            # Generate forecast
+                            future_X = np.arange(n, n + periods).reshape(-1, 1)
+                            forecast = future_X.dot(theta_line).flatten()
+                            
+                            # Calculate MSE on training data
+                            predicted = X.dot(theta_line).flatten()
+                            mse = np.mean((values - predicted) ** 2)
+                            
+                            if mse < best_mse:
+                                best_mse = mse
+                                best_params = {
+                                    'theta': theta,
+                                    'seasonality_period': season_period,
+                                    'decomposition_type': decomp_type
+                                }
+                                best_forecast = forecast
+                                
+                        except Exception as e:
+                            continue
+            
+            print(f"\nBest Theta parameters found: {best_params}")
+            print(f"MSE: {best_mse}")
+            
+            # Create dates for forecast
+            dates = pd.date_range(
+                start=self.df['ds'].iloc[-1] + timedelta(days=1),
+                periods=periods,
+                freq='D'
+            )
+            
+            # Store results
+            self.forecasts['Theta'] = pd.DataFrame({
+                'ds': dates,
+                'yhat': best_forecast,
+                'model': 'Theta'
+            })
+            
+            return self.forecasts['Theta']
+            
+        except Exception as e:
+            print(f"Error in Theta modeling: {str(e)}")
+            return None
+
+    def compare_models(self, periods=5):
+        """Compare forecasts from all models."""
+        try:
+            print("\nTraining models and generating forecasts...")
+            
+            # Train Prophet model
+            self.train_model()  # Using existing Prophet training
+            prophet_forecast = self.make_predictions(periods=periods)
+            self.forecasts['Prophet'] = prophet_forecast[['ds', 'yhat']].copy()
+            self.forecasts['Prophet']['model'] = 'Prophet'
+            
+            # Train SARIMA model
+            self.train_sarima_model(periods=periods)
+            
+            # Train Theta model
+            self.train_theta_model(periods=periods)
+            
+            # Print forecasts for each model
+            for model_name, forecast in self.forecasts.items():
+                print(f"\n{model_name} Forecast for the next {periods} days:")
+                print("Date                      Predicted Price")
+                print("-" * 45)
+                
+                for _, row in forecast.iterrows():
+                    if isinstance(row['ds'], pd.Timestamp):
+                        date_str = row['ds'].strftime('%Y-%m-%d')
+                    else:
+                        date_str = row['ds']
+                    print(f"{date_str}           ${row['yhat']:.2f}")
+            
+            # Create comparison plot
+            self.plot_model_comparisons()
+            
+            return self.forecasts
+            
+        except Exception as e:
+            print(f"Error in model comparison: {str(e)}")
+            return None
+
+    def plot_model_comparisons(self):
+        """Create a comparison plot of all model forecasts."""
+        fig = go.Figure()
+        
+        # Plot historical data
+        fig.add_trace(go.Scatter(
+            x=self.df['ds'],
+            y=self.df['y'],
+            name='Historical Data',
+            mode='lines'
+        ))
+        
+        # Plot forecasts from each model
+        colors = {'Prophet': 'red', 'SARIMA': 'green', 'Theta': 'blue'}
+        
+        for name, forecast in self.forecasts.items():
+            fig.add_trace(go.Scatter(
+                x=forecast['ds'],
+                y=forecast['yhat'],
+                name=f'{name} Forecast',
+                mode='lines+markers',
+                line=dict(color=colors[name], dash='dash')
+            ))
+        
+        fig.update_layout(
+            title=f'{self.stock_name} Stock Price Forecasts - Model Comparison',
+            xaxis_title='Date',
+            yaxis_title='Stock Price ($)',
+            showlegend=True
+        )
+        
+        # Save the comparison plot
+        plot_path = os.path.join(self.output_dir, f'{self.stock_name}_model_comparison.png')
+        fig.write_image(plot_path)
+        fig.show()
+
     def run_full_analysis(self, use_best_params=False):
         """Run the complete analysis pipeline."""
         try:
             if self.df is None:
                 self.prepare_data()
             
+            # Run model comparison first
+            self.compare_models(periods=5)
+            
+            # Continue with existing Prophet-specific analysis
             if use_best_params and self.hyperparameter_test_results:
                 best_params = self.get_best_parameters()
-                print("Using best parameters found:", best_params)
-                # Remove model_id and MSE from parameters before training
+                print("\nUsing best Prophet parameters found:", best_params)
                 params = best_params.copy()
                 params.pop('mse', None)
                 params.pop('model_id', None)
-                
-                # Initialize and train model with best parameters
                 self.model = Prophet(**params)
                 self.model.fit(self.df)
-
-            else:
-                # Use default parameters
-                self.model = Prophet()
-                self.model.fit(self.df)
-                
-            # Changed to explicitly specify 5 periods
-            self.make_predictions(periods=5)
-            self.print_forecast_results(periods=5)
-            self.create_interactive_plots()
-            return self.model, self.forecast
+            
+            return self.model, self.forecasts
             
         except Exception as e:
             print(f"Error in run_full_analysis: {str(e)}")
