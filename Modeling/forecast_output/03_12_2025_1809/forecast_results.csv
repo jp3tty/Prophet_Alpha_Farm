@@ -1,5 +1,0 @@
-model_id,changepoint_prior_scale,seasonality_prior_scale,holidays_prior_scale,seasonality_mode,interval_width,growth,n_changepoints,daily_seasonality,weekly_seasonality,yearly_seasonality,mse,stock
-20250312_181151_04642221,1.2,7,0.01,multiplicative,0.05,linear,70,True,False,True,4.2921502690353055,AAPL
-20250312_183909_1dd8184f,1.0,2,0.01,multiplicative,0.05,linear,65,True,False,True,0.061718879267749764,EGO
-20250312_185938_1704828f,1.0,5,0.01,multiplicative,0.05,linear,60,True,False,True,0.02346847082695587,F
-20250312_190720_5baa528e,1.2,7,0.01,multiplicative,0.05,linear,60,True,False,True,0.1752995415685624,RIVN

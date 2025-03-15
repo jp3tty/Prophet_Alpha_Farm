@@ -66,30 +66,33 @@ class StockForecaster:
         return self.df
 
     def calculate_mse(self, forecast_df):
-            """Calculate Mean Squared Error for the forecast."""
-            try:
-                # Perform merge
-                comparison_df = forecast_df.merge(
-                    self.df[['ds', 'y']], 
-                    on='ds', 
-                    how='inner'
-                )
-                
-                # Calculate MSE
-                mse = mean_squared_error(
-                    comparison_df['y'],
-                    comparison_df['yhat']
-                )
-                                
-                print(f"MSE calculated successfully: {mse:.2f}%")
-                return mse
-                
-            except Exception as e:
-                print(f"\nError in calculate_mse: {str(e)}")
-                print(f"Error type: {type(e)}")
-                import traceback
-                print(f"Full traceback: {traceback.format_exc()}")
-                return None
+        """Calculate Mean Squared Error for the forecast."""
+        try:
+            # Perform merge
+            comparison_df = forecast_df.merge(
+                self.df[['ds', 'y']], 
+                on='ds', 
+                how='inner'
+            )
+            
+            # Calculate MSE
+            mse = mean_squared_error(
+                comparison_df['y'],
+                comparison_df['yhat']
+            )
+            
+            # Calculate RMSE (Root Mean Squared Error) for more interpretable results
+            rmse = np.sqrt(mse)
+                        
+            print(f"MSE calculated successfully: ${mse:.2f} (RMSE: ±${rmse:.2f})")
+            return mse
+            
+        except Exception as e:
+            print(f"\nError in calculate_mse: {str(e)}")
+            print(f"Error type: {type(e)}")
+            import traceback
+            print(f"Full traceback: {traceback.format_exc()}")
+            return None
 
     def _get_model_filename(self):
         """Generate a consistent filename for model files."""
@@ -337,15 +340,34 @@ class StockForecaster:
     def train_sarima_model(self, periods=5):
         """Train and forecast using SARIMA model with parameter grid search."""
         try:
-            # Define parameter grid
+            # Ensure the dates are properly ordered and continuous
+            self.df = self.df.sort_values('ds')
+            
+            # Create DatetimeIndex with explicit frequency
+            date_index = pd.DatetimeIndex(self.df['ds']).to_period('D').to_timestamp()
+            
+            # Preprocess data with proper index
+            data = pd.Series(
+                np.log(self.df['y'].values),
+                index=date_index,
+                name='price'
+            )
+            
+            # Print diagnostic information
+            print("\nSARIMA Data Preparation:")
+            print(f"Data shape: {data.shape}")
+            print(f"Index frequency: {data.index.freq}")
+            print(f"Date range: {data.index.min()} to {data.index.max()}")
+            
+            # More conservative parameter grid
             param_grid = {
-                'p': [1, 2, 3],
-                'd': [1],  # Usually 1 for stock prices
-                'q': [1, 2],
-                'P': [0, 1],
-                'D': [0, 1],
-                'Q': [0, 1],
-                's': [5, 20]  # Weekly and monthly seasonality
+                'p': [1],     # Autoregressive order
+                'd': [1],     # Differencing order
+                'q': [1],     # Moving average order
+                'P': [0, 1],  # Seasonal autoregressive order
+                'D': [0],     # Seasonal differencing order
+                'Q': [0],     # Seasonal moving average order
+                's': [5]      # Seasonal period (weekly)
             }
             
             best_aic = float('inf')
@@ -363,15 +385,17 @@ class StockForecaster:
                                         try:
                                             # Initialize and train SARIMA model
                                             model = SARIMAX(
-                                                self.df['y'],
+                                                data,
                                                 order=(p, d, q),
-                                                seasonal_order=(P, D, Q, s)
+                                                seasonal_order=(P, D, Q, s),
+                                                enforce_stationarity=False,
+                                                enforce_invertibility=False
                                             )
                                             results = model.fit(disp=False)
                                             
-                                            # Check if this model is better
-                                            if results.aic < best_aic:
-                                                best_aic = results.aic
+                                            current_aic = results.aic
+                                            if current_aic < best_aic:
+                                                best_aic = current_aic
                                                 best_params = {
                                                     'p': p, 'd': d, 'q': q,
                                                     'P': P, 'D': D, 'Q': Q, 's': s
@@ -381,24 +405,34 @@ class StockForecaster:
                                         except Exception as e:
                                             continue
             
+            if best_model is None:
+                raise ValueError("No valid SARIMA model found with given parameters")
+            
             print(f"\nBest SARIMA parameters found: {best_params}")
             print(f"AIC: {best_aic}")
             
-            # Generate forecast with best model
-            forecast = best_model.forecast(periods)
-            dates = pd.date_range(
-                start=self.df['ds'].iloc[-1] + timedelta(days=1),
+            # Generate future dates
+            last_date = data.index[-1]
+            future_dates = pd.date_range(
+                start=last_date + timedelta(days=1),
                 periods=periods,
                 freq='D'
             )
             
+            # Generate forecast and transform back
+            forecast = best_model.forecast(periods)
+            forecast_values = np.exp(forecast)
+            
             # Store results
             self.models['SARIMA'] = best_model
             self.forecasts['SARIMA'] = pd.DataFrame({
-                'ds': dates,
-                'yhat': forecast,
+                'ds': future_dates,
+                'yhat': forecast_values,
                 'model': 'SARIMA'
             })
+            
+            print("\nSARIMA Forecast Summary:")
+            print(self.forecasts['SARIMA'][['ds', 'yhat']])
             
             return self.forecasts['SARIMA']
             
@@ -409,11 +443,11 @@ class StockForecaster:
     def train_theta_model(self, periods=5):
         """Train and forecast using Theta model with parameter tuning."""
         try:
-            # Define parameter grid
+            # Define parameter grid with more conservative values
             param_grid = {
-                'theta': [0.5, 1.0, 1.5, 2.0, 2.5],
-                'seasonality_period': [5, 20],  # weekly and monthly
-                'decomposition_type': ['multiplicative', 'additive']
+                'theta': [0.1, 0.2, 0.3, 0.4, 0.5],  # Reduced theta values for less aggressive trends
+                'window_size': [5, 7, 10, 14],        # Different smoothing windows
+                'decomposition_type': ['multiplicative']  # Stick to multiplicative for stock prices
             }
             
             best_mse = float('inf')
@@ -423,38 +457,57 @@ class StockForecaster:
             values = self.df['y'].values
             n = len(values)
             
+            # Use shorter training period for better recent trend capture
+            train_size = min(252, n)  # Use last year of data or all if less
+            values = values[-train_size:]
+            n = len(values)
+            
             # Grid search
             for theta in param_grid['theta']:
-                for season_period in param_grid['seasonality_period']:
+                for window in param_grid['window_size']:
                     for decomp_type in param_grid['decomposition_type']:
                         try:
-                            # Decompose time series
-                            if decomp_type == 'multiplicative':
-                                seasonal = values / np.mean(values)
-                            else:  # additive
-                                seasonal = values - np.mean(values)
+                            # Calculate moving averages for long and short term trends
+                            long_ma = pd.Series(values).rolling(window=window*2, center=True).mean()
+                            short_ma = pd.Series(values).rolling(window=window, center=True).mean()
+                            
+                            # Fill NaN values
+                            long_ma = long_ma.fillna(method='bfill').fillna(method='ffill')
+                            short_ma = short_ma.fillna(method='bfill').fillna(method='ffill')
                             
                             # Calculate trend
+                            trend = long_ma + theta * (short_ma - long_ma)
+                            
+                            # Calculate seasonal pattern
+                            if decomp_type == 'multiplicative':
+                                seasonal = values / trend
+                                seasonal = pd.Series(seasonal).rolling(window=window, center=True).mean()
+                                seasonal = seasonal.fillna(method='bfill').fillna(method='ffill')
+                            
+                            # Fit final trend
                             X = np.arange(n).reshape(-1, 1)
-                            y = values.reshape(-1, 1)
-                            trend = np.linalg.inv(X.T.dot(X)).dot(X.T).dot(y)
+                            trend_model = np.poly1d(np.polyfit(X.flatten(), trend, 2))  # Use quadratic fit
                             
-                            # Apply theta coefficient
-                            theta_line = theta * trend
-                            
-                            # Generate forecast
+                            # Generate forecast components
                             future_X = np.arange(n, n + periods).reshape(-1, 1)
-                            forecast = future_X.dot(theta_line).flatten()
+                            trend_forecast = trend_model(future_X.flatten())
                             
-                            # Calculate MSE on training data
-                            predicted = X.dot(theta_line).flatten()
-                            mse = np.mean((values - predicted) ** 2)
+                            # Calculate recent average seasonal factor
+                            recent_seasonal = seasonal[-window:].mean()
+                            
+                            # Generate final forecast
+                            forecast = trend_forecast * recent_seasonal
+                            
+                            # Calculate MSE on recent data
+                            recent_fitted = trend_model(X[-window:].flatten()) * seasonal[-window:]
+                            recent_actual = values[-window:]
+                            mse = mean_squared_error(recent_actual, recent_fitted)
                             
                             if mse < best_mse:
                                 best_mse = mse
                                 best_params = {
                                     'theta': theta,
-                                    'seasonality_period': season_period,
+                                    'window_size': window,
                                     'decomposition_type': decomp_type
                                 }
                                 best_forecast = forecast
@@ -465,12 +518,26 @@ class StockForecaster:
             print(f"\nBest Theta parameters found: {best_params}")
             print(f"MSE: {best_mse}")
             
+            # Calculate RMSE for comparison
+            rmse = np.sqrt(best_mse)
+            print(f"RMSE: ±${rmse:.2f}")
+            
             # Create dates for forecast
             dates = pd.date_range(
                 start=self.df['ds'].iloc[-1] + timedelta(days=1),
                 periods=periods,
                 freq='D'
             )
+            
+            # Ensure forecast doesn't deviate too much from last known price
+            last_price = values[-1]
+            max_deviation = 0.05  # 5% maximum deviation per day
+            
+            # Adjust forecasts if they deviate too much
+            for i in range(len(best_forecast)):
+                max_price = last_price * (1 + max_deviation * (i + 1))
+                min_price = last_price * (1 - max_deviation * (i + 1))
+                best_forecast[i] = np.clip(best_forecast[i], min_price, max_price)
             
             # Store results
             self.forecasts['Theta'] = pd.DataFrame({
@@ -490,10 +557,16 @@ class StockForecaster:
         try:
             print("\nTraining models and generating forecasts...")
             
-            # Train Prophet model
-            self.train_model()  # Using existing Prophet training
-            prophet_forecast = self.make_predictions(periods=periods)
-            self.forecasts['Prophet'] = prophet_forecast[['ds', 'yhat']].copy()
+            # Use existing champion Prophet model if available, otherwise use default
+            if self.model is not None:
+                prophet_forecast = self.make_predictions(periods=periods)
+            else:
+                # Train new Prophet model only if no champion exists
+                self.train_model()
+                prophet_forecast = self.make_predictions(periods=periods)
+            
+            # Only keep the future predictions (last 5 days)
+            self.forecasts['Prophet'] = prophet_forecast[-periods:][['ds', 'yhat']].copy()
             self.forecasts['Prophet']['model'] = 'Prophet'
             
             # Train SARIMA model
@@ -508,7 +581,8 @@ class StockForecaster:
                 print("Date                      Predicted Price")
                 print("-" * 45)
                 
-                for _, row in forecast.iterrows():
+                # Only show the future predictions
+                for _, row in forecast.tail(periods).iterrows():
                     if isinstance(row['ds'], pd.Timestamp):
                         date_str = row['ds'].strftime('%Y-%m-%d')
                     else:
@@ -526,39 +600,51 @@ class StockForecaster:
 
     def plot_model_comparisons(self):
         """Create a comparison plot of all model forecasts."""
-        fig = go.Figure()
-        
-        # Plot historical data
-        fig.add_trace(go.Scatter(
-            x=self.df['ds'],
-            y=self.df['y'],
-            name='Historical Data',
-            mode='lines'
-        ))
-        
-        # Plot forecasts from each model
-        colors = {'Prophet': 'red', 'SARIMA': 'green', 'Theta': 'blue'}
-        
-        for name, forecast in self.forecasts.items():
+        try:
+            fig = go.Figure()
+            
+            # Plot historical data for the last 30 days for better visualization
+            historical_days = 30
             fig.add_trace(go.Scatter(
-                x=forecast['ds'],
-                y=forecast['yhat'],
-                name=f'{name} Forecast',
-                mode='lines+markers',
-                line=dict(color=colors[name], dash='dash')
+                x=self.df['ds'].tail(historical_days),
+                y=self.df['y'].tail(historical_days),
+                name='Historical Data',
+                mode='lines'
             ))
-        
-        fig.update_layout(
-            title=f'{self.stock_name} Stock Price Forecasts - Model Comparison',
-            xaxis_title='Date',
-            yaxis_title='Stock Price ($)',
-            showlegend=True
-        )
-        
-        # Save the comparison plot
-        plot_path = os.path.join(self.output_dir, f'{self.stock_name}_model_comparison.png')
-        fig.write_image(plot_path)
-        fig.show()
+            
+            # Plot only the future forecasts from each model
+            colors = {'Prophet': 'red', 'SARIMA': 'green', 'Theta': 'blue'}
+            
+            for name, forecast in self.forecasts.items():
+                # Each forecast should already contain only the future predictions (5 days)
+                fig.add_trace(go.Scatter(
+                    x=forecast['ds'],
+                    y=forecast['yhat'],
+                    name=f'{name} Forecast',
+                    mode='lines+markers',
+                    line=dict(color=colors[name], dash='dash')
+                ))
+            
+            fig.update_layout(
+                title=f'{self.stock_name} Stock Price Forecasts - Model Comparison',
+                xaxis_title='Date',
+                yaxis_title='Stock Price ($)',
+                showlegend=True
+            )
+            
+            # Save the comparison plot with explicit error handling
+            plot_path = os.path.join(self.output_dir, f'{self.stock_name}_model_comparison.png')
+            try:
+                fig.write_image(plot_path)
+                print(f"Comparison plot saved: {plot_path}")
+            except Exception as e:
+                print(f"Error saving comparison plot: {str(e)}")
+            
+            # Show the plot
+            fig.show()
+            
+        except Exception as e:
+            print(f"Error in plot_model_comparisons: {str(e)}")
 
     def run_full_analysis(self, use_best_params=False):
         """Run the complete analysis pipeline."""
@@ -566,24 +652,87 @@ class StockForecaster:
             if self.df is None:
                 self.prepare_data()
             
-            # Run model comparison first
-            self.compare_models(periods=5)
-            
-            # Continue with existing Prophet-specific analysis
+            # If use_best_params is True and we have results, set up the champion model first
             if use_best_params and self.hyperparameter_test_results:
                 best_params = self.get_best_parameters()
                 print("\nUsing best Prophet parameters found:", best_params)
-                params = best_params.copy()
-                params.pop('mse', None)
-                params.pop('model_id', None)
-                self.model = Prophet(**params)
+                
+                # Clean parameters to only include Prophet-specific ones
+                prophet_params = {
+                    k: v for k, v in best_params.items() 
+                    if k in [
+                        'changepoint_prior_scale', 'seasonality_prior_scale',
+                        'holidays_prior_scale', 'seasonality_mode', 'interval_width',
+                        'growth', 'n_changepoints', 'daily_seasonality',
+                        'weekly_seasonality', 'yearly_seasonality'
+                    ]
+                }
+                
+                # Initialize and fit Prophet model with cleaned parameters
+                self.model = Prophet(**prophet_params)
                 self.model.fit(self.df)
+            
+            # Run model comparison using the champion model
+            self.compare_models(periods=5)
+            
+            # Print comparison table
+            self.print_model_comparison_table()
             
             return self.model, self.forecasts
             
         except Exception as e:
             print(f"Error in run_full_analysis: {str(e)}")
             raise
+
+    def print_model_comparison_table(self):
+        """Print a formatted table comparing the performance of all models."""
+        try:
+            # Calculate metrics for each model
+            metrics = {}
+            last_known_price = self.df['y'].iloc[-1]
+            
+            for model_name, forecast in self.forecasts.items():
+                # Calculate average forecast
+                avg_forecast = forecast['yhat'].mean()
+                
+                # Calculate metrics
+                metrics[model_name] = {
+                    'First Day': forecast['yhat'].iloc[0],
+                    'Last Day': forecast['yhat'].iloc[-1],
+                    'Average': avg_forecast,
+                    'Change': ((forecast['yhat'].iloc[-1] - last_known_price) / last_known_price) * 100
+                }
+            
+            # Print the comparison table
+            print("\n" + "="*80)
+            print(f"Model Comparison for {self.stock_name}")
+            print("="*80)
+            
+            # Print last known price
+            print(f"Last Known Price: ${last_known_price:.2f}")
+            print("-"*80)
+            
+            # Header
+            print(f"{'Model':<10} {'First Day':>12} {'Last Day':>12} {'Average':>12} {'% Change':>12}")
+            print("-"*80)
+            
+            # Print each model's metrics
+            for model, stats in metrics.items():
+                print(f"{model:<10} ${stats['First Day']:>11.2f} ${stats['Last Day']:>11.2f} "
+                      f"${stats['Average']:>11.2f} {stats['Change']:>11.2f}%")
+            
+            print("="*80)
+            
+            # Print model-specific metrics if available
+            if hasattr(self, 'current_best_mse'):
+                print(f"\nProphet Best MSE: {self.current_best_mse:.2f} (RMSE: ±${np.sqrt(self.current_best_mse):.2f})")
+            
+            # Add any additional relevant metrics or notes
+            print("\nNote: % Change represents the predicted price change from the last known price")
+            print("      to the final forecast day.")
+            
+        except Exception as e:
+            print(f"Error in model comparison table: {str(e)}")
 
 def main():
     """Main entry point of the program."""
@@ -604,6 +753,7 @@ def main():
         
         # Initialize list to store all results
         all_results = []
+        all_comparisons = []  # New list to store comparison metrics
         
         print(f"\nFound {len(csv_files)} CSV files to process")
         
@@ -614,14 +764,14 @@ def main():
             # Initialize forecaster for current file
             file_path = os.path.join(price_data_dir, csv_file)
             forecaster = StockForecaster(file_path)
-            forecaster.output_dir = output_dir  # Set the output directory
+            forecaster.output_dir = output_dir
             
             # Load and print data sample
             forecaster.prepare_data()
             print("\nData shape:", forecaster.df.shape)
             
             # Set baseline MSE
-            baseline_mse = 15  # Set your initial baseline MSE here
+            baseline_mse = 15
             print(f"\nStarting with baseline MSE: {baseline_mse}")
             
             try:
@@ -643,20 +793,72 @@ def main():
                 print("\nRunning full analysis with best parameters...")
                 forecaster.run_full_analysis(use_best_params=True)
                 
+                # Collect comparison metrics for this stock
+                metrics = {}
+                last_known_price = forecaster.df['y'].iloc[-1]
+                
+                for model_name, forecast in forecaster.forecasts.items():
+                    mse, rmse = forecaster.calculate_model_mse(model_name)
+                    metrics[model_name] = {
+                        'First Day': forecast['yhat'].iloc[0],
+                        'Last Day': forecast['yhat'].iloc[-1],
+                        'Average': forecast['yhat'].mean(),
+                        'Change': ((forecast['yhat'].iloc[-1] - last_known_price) / last_known_price) * 100,
+                        'MSE': mse if mse is not None else float('nan'),
+                        'RMSE': rmse if rmse is not None else float('nan')
+                    }
+                
+                all_comparisons.append({
+                    'stock': stock_name,
+                    'last_price': last_known_price,
+                    'metrics': metrics
+                })
+                
             except Exception as e:
                 print(f"Error processing {csv_file}: {str(e)}")
                 continue
         
-        # Save consolidated results in the same timestamped directory
+        # Save consolidated results
         if all_results:
             results_filename = 'forecast_results.csv'
             results_path = os.path.join(output_dir, results_filename)
-            
-            # Convert results to DataFrame and save
             results_df = pd.DataFrame(all_results)
             results_df.to_csv(results_path, index=False)
             print(f"\nConsolidated results saved to: {results_path}")
+        
+        # Print final comparison tables for all stocks
+        print("\n" + "="*100)
+        print("FINAL MODEL COMPARISONS")
+        print("="*100)
+        
+        for comparison in all_comparisons:
+            stock = comparison['stock']
+            last_price = comparison['last_price']
+            metrics = comparison['metrics']
             
+            print(f"\nStock: {stock}")
+            print("="*100)
+            print(f"Last Known Price: ${last_price:.2f}")
+            print("-"*100)
+            
+            # Header
+            print(f"{'Model':<10} {'First Day':>12} {'Last Day':>12} {'Average':>12} {'% Change':>12} "
+                  f"{'MSE':>12} {'RMSE':>12}")
+            print("-"*100)
+            
+            # Print each model's metrics
+            for model, stats in metrics.items():
+                print(f"{model:<10} ${stats['First Day']:>11.2f} ${stats['Last Day']:>11.2f} "
+                      f"${stats['Average']:>11.2f} {stats['Change']:>11.2f}% "
+                      f"${stats['MSE']:>11.2f} ${stats['RMSE']:>11.2f}")
+            
+            print("="*100)
+        
+        print("\nNotes:")
+        print("- % Change represents the predicted price change from the last known price to the final forecast day")
+        print("- MSE (Mean Squared Error) represents the average squared difference between predictions and actual values")
+        print("- RMSE (Root Mean Squared Error) represents the average error margin in dollars (±)")
+        
         return 0  # Success
     
     except Exception as e:
