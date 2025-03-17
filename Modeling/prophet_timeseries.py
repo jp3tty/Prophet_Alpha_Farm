@@ -51,15 +51,22 @@ class ProphetTimeSeriesModel(BaseTimeSeriesModel):
 
     def train_model(self, **kwargs):
         """Train the Prophet model with optional grid search for hyperparameters."""
+        if self.df is None:
+            self.prepare_data()
+            
         # If kwargs are provided, use them directly
         if kwargs:
-            self.model = Prophet(**kwargs)
-            self.model.fit(self.df)
-            forecast_df = self.make_predictions()
-            mse, rmse = self.calculate_mse(forecast_df, is_training=True)
-            print(f"Model trained with MSE: {mse:.2f}, RMSE: {rmse:.2f}")
-            self.save_model('Prophet')
-            return mse
+            try:
+                self.model = Prophet(**kwargs)
+                self.model.fit(self.df)
+                forecast_df = self.make_predictions()
+                mse, rmse = self.calculate_mse(forecast_df, is_training=True)
+                print(f"Model trained with MSE: {mse:.2f}, RMSE: {rmse:.2f}")
+                self.save_model('Prophet')
+                return mse
+            except Exception as e:
+                print(f"Error training model with provided parameters: {str(e)}")
+                return float('inf')
 
         # Otherwise perform grid search
         all_params = [dict(zip(self.param_grid.keys(), v)) 
@@ -69,15 +76,18 @@ class ProphetTimeSeriesModel(BaseTimeSeriesModel):
         
         for params in tqdm(all_params):
             try:
-                m = Prophet(**params)
-                m.fit(self.df)
-                forecast_df = self.make_predictions(model=m)
+                # Create and train a new Prophet model with current parameters
+                current_model = Prophet(**params)
+                current_model.fit(self.df)
+                
+                # Make predictions and calculate MSE
+                forecast_df = self.make_predictions(model=current_model)
                 mse, rmse = self.calculate_mse(forecast_df, is_training=True)
                 
                 if mse < self.best_mse:
                     self.best_mse = mse
                     self.best_params = params
-                    self.model = m
+                    self.model = current_model
                     print(f"\nNew best MSE: {mse:.2f}, RMSE: {rmse:.2f}")
                     print(f"Parameters: {params}")
             except Exception as e:
@@ -93,14 +103,22 @@ class ProphetTimeSeriesModel(BaseTimeSeriesModel):
         else:
             raise Exception("No valid model found during grid search")
 
-    def make_predictions(self, periods=5):
+    def make_predictions(self, periods=5, model=None):
         """Generate predictions for the specified number of periods."""
-        if self.model is None:
+        if model is None:
+            model = self.model
+            
+        if model is None:
             raise ValueError("Model not trained. Call train_model() first.")
         
-        future = self.model.make_future_dataframe(periods=periods)
-        self.forecast = self.model.predict(future)
-        return self.forecast 
+        future = model.make_future_dataframe(periods=periods)
+        forecast = model.predict(future)
+        
+        # Store forecast if using the main model
+        if model == self.model:
+            self.forecast = forecast
+            
+        return forecast
 
     def plot_forecast(self, forecast_df):
         """Create and save forecast plot."""
@@ -108,22 +126,24 @@ class ProphetTimeSeriesModel(BaseTimeSeriesModel):
             # Create full plot
             fig = go.Figure()
 
-            # Plot historical data (last 60 days for better visualization)
-            historical_data = self.df.tail(60)
+            # Plot historical data (last 14 days for visualization)
+            historical_data = self.df.tail(14)
             fig.add_trace(go.Scatter(
                 x=historical_data['ds'],
                 y=historical_data['y'],
                 name='Historical Data',
-                mode='lines'
+                mode='lines',
+                line=dict(color='blue', width=2)
             ))
 
-            # Plot forecast
+            # Get only the future predictions (next 5 days)
+            future_data = forecast_df[forecast_df['ds'] > self.df['ds'].iloc[-1]]
             fig.add_trace(go.Scatter(
-                x=forecast_df['ds'],
-                y=forecast_df['yhat'],
+                x=future_data['ds'],
+                y=future_data['yhat'],
                 name='Forecast',
-                mode='lines+markers',
-                line=dict(dash='dash')
+                mode='lines',
+                line=dict(color='red', dash='dot', width=2)
             ))
 
             # Add last known price point
@@ -134,27 +154,42 @@ class ProphetTimeSeriesModel(BaseTimeSeriesModel):
                 y=[last_known_price],
                 name='Last Known Price',
                 mode='markers',
-                marker=dict(size=10, color='red')
+                marker=dict(color='black', size=10, symbol='circle')
             ))
 
+            # Calculate x-axis range
+            min_date = historical_data['ds'].min()
+            # Add 2 days to the last prediction date
+            max_date = future_data['ds'].max() + pd.Timedelta(days=2)
+
+            # Update layout
             fig.update_layout(
-                title=f'{self.stock_name} Stock Price Forecast - Prophet Model<br>MSE: {self.best_mse:.4f}',
+                title=f'{self.stock_name} Stock Price Forecast',
                 xaxis_title='Date',
                 yaxis_title='Stock Price ($)',
-                showlegend=True
+                showlegend=True,
+                xaxis=dict(
+                    type='date',
+                    tickformat='%Y-%m-%d',
+                    tickangle=45,
+                    range=[min_date, max_date]  # Set explicit range
+                ),
+                yaxis=dict(
+                    tickprefix='$',
+                    tickformat='.2f'
+                ),
+                hovermode='x unified'
             )
 
+            # Save plot if output directory exists
             if self.output_dir:
                 plot_path = os.path.join(
                     self.output_dir, 
-                    f'{self.stock_name}_prophet_forecast.png'
+                    f'{self.stock_name}_{self.__class__.__name__}_forecast.png'
                 )
                 fig.write_image(plot_path)
                 print(f"Plot saved: {plot_path}")
 
-            # Create focused plot
-            self.plot_focused_forecast(forecast_df)
-            
             return fig
         except Exception as e:
             print(f"Error creating plot: {str(e)}")

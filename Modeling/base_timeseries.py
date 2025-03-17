@@ -58,11 +58,35 @@ class BaseTimeSeriesModel:
         print(f"Model saved to {filepath}")
         return filepath
 
-    def prepare_data(self):
-        """Read and prepare the stock data."""
+    def prepare_data(self, max_training_days=None):
+        """Read and prepare the stock data.
+        
+        Args:
+            max_training_days: If provided, limit training data to last N days
+        """
+        # Read data
         self.df = pd.read_csv(self.csv_path)
         self.df = self.df.rename(columns={'Date': 'ds', 'Price': 'y'})
         self.df['ds'] = pd.to_datetime(self.df['ds'])
+        
+        # Sort by date
+        self.df = self.df.sort_values('ds')
+        
+        # Print data info
+        total_days = len(self.df)
+        date_range = (self.df['ds'].max() - self.df['ds'].min()).days
+        price_range = f"${self.df['y'].min():.2f} - ${self.df['y'].max():.2f}"
+        
+        print("\nData Summary:")
+        print(f"Total data points: {total_days}")
+        print(f"Date range: {date_range} days")
+        print(f"Price range: {price_range}")
+        
+        # Optionally limit training data
+        if max_training_days is not None and max_training_days < len(self.df):
+            self.df = self.df.tail(max_training_days)
+            print(f"Limited to last {max_training_days} days for training")
+        
         return self.df
 
     def calculate_mse(self, forecast_df, is_training=False):
@@ -75,25 +99,66 @@ class BaseTimeSeriesModel:
         try:
             if is_training:
                 # For training evaluation, use last 30 days
-                comparison_df = forecast_df.merge(
-                    self.df[['ds', 'y']].tail(30), 
-                    on='ds', 
-                    how='inner'
-                )
+                last_30_days = self.df.tail(30)
+                comparison_df = forecast_df[forecast_df['ds'].isin(last_30_days['ds'])]
+                
+                if len(comparison_df) == 0:
+                    print("Warning: No overlapping dates found for MSE calculation")
+                    return float('inf'), float('inf')
+                
+                # Calculate squared differences
+                squared_diff = (comparison_df['yhat'].values - last_30_days['y'].values) ** 2
+                
+                # Remove any NaN values
+                squared_diff = squared_diff[~np.isnan(squared_diff)]
+                
+                if len(squared_diff) == 0:
+                    print("Warning: No valid comparisons after removing NaN values")
+                    return float('inf'), float('inf')
+                
+                mse = np.mean(squared_diff)
+                rmse = np.sqrt(mse)
+                
+                # Print some debug info
+                print(f"\nMSE Calculation (Training):")
+                print(f"Number of comparison points: {len(squared_diff)}")
+                print(f"Average actual price: ${last_30_days['y'].mean():.2f}")
+                print(f"Average predicted price: ${comparison_df['yhat'].mean():.2f}")
+                print(f"MSE: {mse:.2f}")
+                print(f"RMSE: ${rmse:.2f} (average prediction error)")
+                
             else:
-                # For forecast evaluation, use all available actual data
+                # For forecast evaluation, use only overlapping dates
                 comparison_df = forecast_df.merge(
                     self.df[['ds', 'y']], 
                     on='ds', 
                     how='inner'
                 )
-            
-            if len(comparison_df) == 0:
-                print("Warning: No overlapping dates found for MSE calculation")
-                return float('inf'), float('inf')
-            
-            mse = np.mean((comparison_df['y'] - comparison_df['yhat'])**2)
-            rmse = np.sqrt(mse)
+                
+                if len(comparison_df) == 0:
+                    print("Warning: No overlapping dates found for MSE calculation")
+                    return float('inf'), float('inf')
+                
+                # Calculate squared differences
+                squared_diff = (comparison_df['yhat'] - comparison_df['y']) ** 2
+                
+                # Remove any NaN values
+                squared_diff = squared_diff[~np.isnan(squared_diff)]
+                
+                if len(squared_diff) == 0:
+                    print("Warning: No valid comparisons after removing NaN values")
+                    return float('inf'), float('inf')
+                
+                mse = np.mean(squared_diff)
+                rmse = np.sqrt(mse)
+                
+                # Print some debug info
+                print(f"\nMSE Calculation (Forecast):")
+                print(f"Number of comparison points: {len(squared_diff)}")
+                print(f"Average actual price: ${comparison_df['y'].mean():.2f}")
+                print(f"Average predicted price: ${comparison_df['yhat'].mean():.2f}")
+                print(f"MSE: {mse:.2f}")
+                print(f"RMSE: ${rmse:.2f} (average prediction error)")
             
             return mse, rmse
             
