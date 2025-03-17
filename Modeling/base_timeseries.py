@@ -23,6 +23,7 @@ import numpy as np
 from datetime import datetime, timedelta
 import plotly.graph_objects as go
 import os
+import pickle
 
 class BaseTimeSeriesModel:
     def __init__(self, csv_path):
@@ -34,7 +35,28 @@ class BaseTimeSeriesModel:
         
         # Extract stock name from csv path
         self.stock_name = os.path.splitext(os.path.basename(csv_path))[0].split('_')[0]
-        self.output_dir = None
+        
+        # Set up output directory for model files
+        self.output_dir = os.path.join(os.path.dirname(os.path.dirname(csv_path)), 'forecast_output')
+        os.makedirs(self.output_dir, exist_ok=True)
+
+    def save_model(self, model_type):
+        """Save the trained model to a pickle file.
+        
+        Args:
+            model_type (str): Type of model (e.g., 'Prophet', 'SARIMA', 'Theta')
+        """
+        if self.model is None:
+            raise ValueError("No model to save. Train the model first.")
+            
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        filename = f"{self.stock_name}_{model_type}_Model_{timestamp}.pkl"
+        filepath = os.path.join(self.output_dir, filename)
+        
+        with open(filepath, 'wb') as f:
+            pickle.dump(self.model, f)
+        print(f"Model saved to {filepath}")
+        return filepath
 
     def prepare_data(self):
         """Read and prepare the stock data."""
@@ -43,14 +65,32 @@ class BaseTimeSeriesModel:
         self.df['ds'] = pd.to_datetime(self.df['ds'])
         return self.df
 
-    def calculate_mse(self, forecast_df):
-        """Calculate Mean Squared Error for the forecast."""
+    def calculate_mse(self, forecast_df, is_training=False):
+        """Calculate Mean Squared Error for the forecast.
+        
+        Args:
+            forecast_df: DataFrame with predictions
+            is_training: If True, calculates MSE on training data, else on forecast
+        """
         try:
-            comparison_df = forecast_df.merge(
-                self.df[['ds', 'y']], 
-                on='ds', 
-                how='inner'
-            )
+            if is_training:
+                # For training evaluation, use last 30 days
+                comparison_df = forecast_df.merge(
+                    self.df[['ds', 'y']].tail(30), 
+                    on='ds', 
+                    how='inner'
+                )
+            else:
+                # For forecast evaluation, use all available actual data
+                comparison_df = forecast_df.merge(
+                    self.df[['ds', 'y']], 
+                    on='ds', 
+                    how='inner'
+                )
+            
+            if len(comparison_df) == 0:
+                print("Warning: No overlapping dates found for MSE calculation")
+                return float('inf'), float('inf')
             
             mse = np.mean((comparison_df['y'] - comparison_df['yhat'])**2)
             rmse = np.sqrt(mse)
@@ -59,7 +99,7 @@ class BaseTimeSeriesModel:
             
         except Exception as e:
             print(f"Error in calculate_mse: {str(e)}")
-            return None, None
+            return float('inf'), float('inf')
 
     def plot_forecast(self, forecast_df):
         """Create and save forecast plot."""

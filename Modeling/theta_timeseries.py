@@ -29,17 +29,10 @@ import os
 from itertools import product
 from tqdm import tqdm
 
-class ThetaTimeSeriesModel:
+class ThetaTimeSeriesModel(BaseTimeSeriesModel):
     def __init__(self, csv_path):
         """Initialize the Theta model with data path."""
-        self.csv_path = csv_path
-        self.df = None
-        self.model = None
-        self.forecast = None
-        self.output_dir = None
-        
-        # Extract stock name from csv path
-        self.stock_name = os.path.splitext(os.path.basename(csv_path))[0].split('_')[0]
+        super().__init__(csv_path)
         
         # Enhanced parameter grid for Theta model
         self.param_grid = {
@@ -103,51 +96,51 @@ class ThetaTimeSeriesModel:
             return None, None
 
     def train_model(self, **kwargs):
-        """Train and forecast using Theta model with parameter tuning."""
+        """Train the Theta model with optional grid search for hyperparameters."""
         if self.df is None:
             self.prepare_data()
-
+            
         values = self.df['y'].values
-        train_size = min(252, len(values))  # Use last year of data or all if less
-        values = values[-train_size:]
-        print(f"Training on {len(values)} days of data")
-
-        # If parameters provided, use them directly
-        if kwargs:
-            params = kwargs
-            self.model = self._fit_model(values, params)
-            return self.model
-
-        # Otherwise, perform grid search
-        print("\nPerforming grid search for best parameters...")
-        param_combinations = [dict(zip(self.param_grid.keys(), v)) 
-                           for v in product(*self.param_grid.values())]
         
-        for params in tqdm(param_combinations, desc="Testing parameters"):
+        # If kwargs are provided, use them directly
+        if kwargs:
+            self.model = self._fit_model(values, kwargs)
+            forecast_df = self.make_predictions()
+            mse, rmse = self.calculate_mse(forecast_df, is_training=True)
+            print(f"Model trained with MSE: {mse:.2f}, RMSE: {rmse:.2f}")
+            self.save_model('Theta')
+            return mse
+
+        # Otherwise perform grid search
+        all_params = [dict(zip(self.param_grid.keys(), v)) 
+                     for v in product(*self.param_grid.values())]
+        
+        print(f"Grid searching through {len(all_params)} combinations...")
+        
+        for params in tqdm(all_params):
             try:
-                # Calculate MSE on validation data
-                mse, rmse = self.calculate_mse(values, params)
+                model = self._fit_model(values, params)
+                forecast_df = self.make_predictions(model=model)
+                mse, rmse = self.calculate_mse(forecast_df, is_training=True)
                 
-                if mse is not None and mse < self.best_mse:
+                if mse < self.best_mse:
                     self.best_mse = mse
                     self.best_params = params
-                    self.model = self._fit_model(values, params)
-                    print(f"\nNew best MSE found: {mse:.4f}")
+                    self.model = model
+                    print(f"\nNew best MSE: {mse:.2f}, RMSE: {rmse:.2f}")
                     print(f"Parameters: {params}")
-                    
             except Exception as e:
-                print(f"\nError with parameters {params}:")
-                print(f"Error details: {str(e)}")
+                print(f"Error with parameters {params}: {str(e)}")
                 continue
-
-        if self.best_params:
-            print(f"\nBest parameters found:")
-            print(f"Parameters: {self.best_params}")
-            print(f"MSE: {self.best_mse:.4f}")
+        
+        if self.model is not None:
+            print("\nBest model parameters:")
+            print(self.best_params)
+            print(f"Best MSE: {self.best_mse:.2f}")
+            self.save_model('Theta')
+            return self.best_mse
         else:
-            raise ValueError("No valid parameters found during grid search")
-
-        return self.model
+            raise Exception("No valid model found during grid search")
 
     def _fit_model(self, values, params):
         """Helper method to fit the model with given parameters."""
@@ -202,9 +195,12 @@ class ThetaTimeSeriesModel:
             print(f"Error fitting model: {str(e)}")
             return None
 
-    def make_predictions(self, periods=5):
+    def make_predictions(self, periods=5, model=None):
         """Generate predictions for the specified number of periods."""
-        if self.model is None:
+        if model is None:
+            model = self.model
+            
+        if model is None:
             raise ValueError("Model not trained. Call train_model() first.")
 
         # Create dates for forecast
@@ -215,8 +211,8 @@ class ThetaTimeSeriesModel:
             freq='B'  # Business days
         )
 
-        # Get the forecast values from the training
-        forecast_values = self.model['forecast']
+        # Get the forecast values
+        forecast_values = model['forecast']
 
         # Apply constraints to prevent unrealistic price movements
         last_price = self.df['y'].iloc[-1]

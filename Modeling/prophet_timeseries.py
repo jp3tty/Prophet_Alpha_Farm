@@ -50,53 +50,48 @@ class ProphetTimeSeriesModel(BaseTimeSeriesModel):
         self.best_mse = float('inf')
 
     def train_model(self, **kwargs):
-        """Train the Prophet model with given parameters."""
-        if self.df is None:
-            self.prepare_data()
-        
-        # If no parameters provided, perform grid search
-        if not kwargs:
-            print("\nPerforming grid search for best parameters...")
-            param_combinations = [dict(zip(self.param_grid.keys(), v)) 
-                               for v in product(*self.param_grid.values())]
-            
-            for params in tqdm(param_combinations, desc="Testing parameters"):
-                try:
-                    # Train model with current parameters
-                    model = Prophet(**params)
-                    model.fit(self.df)
-                    
-                    # Make predictions for the training period
-                    future = model.make_future_dataframe(periods=0)
-                    forecast = model.predict(future)
-                    
-                    # Calculate MSE
-                    mse, rmse = self.calculate_mse(forecast)
-                    
-                    if mse is not None and mse < self.best_mse:
-                        self.best_mse = mse
-                        self.best_params = params
-                        self.model = model
-                        print(f"\nNew best MSE found: {mse:.4f}")
-                        print(f"Parameters: {params}")
-                        
-                except Exception as e:
-                    print(f"\nError with parameters {params}:")
-                    print(f"Error details: {str(e)}")
-                    continue
-            
-            if self.best_params:
-                print(f"\nBest parameters found:")
-                print(f"Parameters: {self.best_params}")
-                print(f"MSE: {self.best_mse:.4f}")
-            else:
-                raise ValueError("No valid parameters found during grid search")
-        else:
-            # Use provided parameters
+        """Train the Prophet model with optional grid search for hyperparameters."""
+        # If kwargs are provided, use them directly
+        if kwargs:
             self.model = Prophet(**kwargs)
             self.model.fit(self.df)
+            forecast_df = self.make_predictions()
+            mse, rmse = self.calculate_mse(forecast_df, is_training=True)
+            print(f"Model trained with MSE: {mse:.2f}, RMSE: {rmse:.2f}")
+            self.save_model('Prophet')
+            return mse
+
+        # Otherwise perform grid search
+        all_params = [dict(zip(self.param_grid.keys(), v)) 
+                     for v in product(*self.param_grid.values())]
         
-        return self.model
+        print(f"Grid searching through {len(all_params)} combinations...")
+        
+        for params in tqdm(all_params):
+            try:
+                m = Prophet(**params)
+                m.fit(self.df)
+                forecast_df = self.make_predictions(model=m)
+                mse, rmse = self.calculate_mse(forecast_df, is_training=True)
+                
+                if mse < self.best_mse:
+                    self.best_mse = mse
+                    self.best_params = params
+                    self.model = m
+                    print(f"\nNew best MSE: {mse:.2f}, RMSE: {rmse:.2f}")
+                    print(f"Parameters: {params}")
+            except Exception as e:
+                print(f"Error with parameters {params}: {str(e)}")
+                continue
+        
+        if self.model is not None:
+            print("\nBest model parameters:")
+            print(self.best_params)
+            print(f"Best MSE: {self.best_mse:.2f}")
+            self.save_model('Prophet')
+            return self.best_mse
+        else:
+            raise Exception("No valid model found during grid search")
 
     def make_predictions(self, periods=5):
         """Generate predictions for the specified number of periods."""

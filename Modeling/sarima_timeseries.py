@@ -48,17 +48,12 @@ class SarimaTimeSeriesModel(BaseTimeSeriesModel):
             self.prepare_data()
 
         # Create time series without explicit frequency
-        dates = pd.to_datetime(self.df['ds'])
-        data = pd.Series(
-            np.log(self.df['y'].values),
-            index=dates,
-            name='price'
-        )
-
+        ts = pd.Series(self.df['y'].values, index=self.df['ds'])
+        
         best_aic = float('inf')
-        best_model = None
-
-        # Grid search
+        best_params = None
+        
+        # Grid search through parameters
         for p in self.param_grid['p']:
             for d in self.param_grid['d']:
                 for q in self.param_grid['q']:
@@ -67,32 +62,46 @@ class SarimaTimeSeriesModel(BaseTimeSeriesModel):
                             for Q in self.param_grid['Q']:
                                 for s in self.param_grid['s']:
                                     try:
-                                        model = SARIMAX(
-                                            data,
-                                            order=(p, d, q),
-                                            seasonal_order=(P, D, Q, s),
-                                            enforce_stationarity=False,
-                                            enforce_invertibility=False
-                                        )
+                                        model = SARIMAX(ts,
+                                                      order=(p, d, q),
+                                                      seasonal_order=(P, D, Q, s),
+                                                      enforce_stationarity=False,
+                                                      enforce_invertibility=False)
                                         results = model.fit(disp=False)
                                         
-                                        if results.aic < best_aic:
+                                        # Make predictions for evaluation
+                                        forecast = self.make_predictions(model=results)
+                                        mse, rmse = self.calculate_mse(forecast, is_training=True)
+                                        
+                                        # Use both AIC and MSE for model selection
+                                        if results.aic < best_aic and mse < float('inf'):
                                             best_aic = results.aic
-                                            best_model = results
-                                            
+                                            best_params = {
+                                                'order': (p, d, q),
+                                                'seasonal_order': (P, D, Q, s)
+                                            }
+                                            self.model = results
+                                            print(f"\nNew best AIC: {best_aic:.2f}, MSE: {mse:.2f}, RMSE: {rmse:.2f}")
+                                            print(f"Parameters: {best_params}")
                                     except Exception as e:
-                                        print(f"Error with parameters p={p}, d={d}, q={q}, P={P}, D={D}, Q={Q}, s={s}: {str(e)}")
+                                        print(f"Error with SARIMA{(p,d,q)}x{(P,D,Q,s)}: {str(e)}")
                                         continue
+        
+        if self.model is not None:
+            print("\nBest model parameters:")
+            print(best_params)
+            print(f"Best AIC: {best_aic:.2f}")
+            self.save_model('SARIMA')
+            return best_aic
+        else:
+            raise Exception("No valid model found during grid search")
 
-        if best_model is None:
-            raise ValueError("No valid model found with the given parameters")
-
-        self.model = best_model
-        return self.model
-
-    def make_predictions(self, periods=5):
+    def make_predictions(self, periods=5, model=None):
         """Generate predictions for the specified number of periods."""
-        if self.model is None:
+        if model is None:
+            model = self.model
+            
+        if model is None:
             raise ValueError("Model not trained. Call train_model() first.")
 
         # Generate future dates using business day frequency
@@ -103,8 +112,8 @@ class SarimaTimeSeriesModel(BaseTimeSeriesModel):
             freq='B'  # Business days
         )
 
-        # Generate forecast and transform back from log scale
-        forecast_values = np.exp(self.model.forecast(periods))
+        # Generate forecast
+        forecast_values = model.forecast(periods)
 
         # Create forecast DataFrame
         self.forecast = pd.DataFrame({
@@ -114,18 +123,22 @@ class SarimaTimeSeriesModel(BaseTimeSeriesModel):
 
         return self.forecast
 
-    def calculate_mse(self, forecast_df):
+    def calculate_mse(self, forecast_df, is_training=False):
         """Calculate Mean Squared Error for the forecast."""
         try:
             # Get the last 30 days of actual data for comparison
             last_30_days = self.df.tail(30)
             
             # Get model predictions for the last 30 days
-            predictions = np.exp(self.model.predict(start=len(self.df)-30, end=len(self.df)-1))
+            predictions = np.exp(forecast_df['yhat'].values)
             
             # Calculate MSE and RMSE
             mse = np.mean((last_30_days['y'].values - predictions)**2)
             rmse = np.sqrt(mse)
+            
+            if is_training:
+                self.mse = mse
+                self.rmse = rmse
             
             return mse, rmse
             
