@@ -3,6 +3,8 @@ from prophet import Prophet
 from datetime import datetime, timedelta
 import plotly.graph_objects as go
 from prophet.plot import plot_plotly, plot_components_plotly
+import os
+import numpy as np
 
 # Read and prepare the data
 def prepare_data(csv_path):
@@ -40,6 +42,24 @@ def make_predictions(model, periods=3):
     forecast = model.predict(future_dates)
     
     return forecast
+
+# Calculate MSE and RMSE
+def calculate_mse(forecast, df):
+    # Merge forecast with actual data
+    comparison_df = forecast.merge(
+        df[['ds', 'y']], 
+        on='ds', 
+        how='inner'
+    )
+    
+    # Calculate squared differences
+    squared_diff = (comparison_df['yhat'].values - comparison_df['y'].values) ** 2
+    
+    # Calculate MSE and RMSE
+    mse = np.mean(squared_diff)
+    rmse = np.sqrt(mse)
+    
+    return mse, rmse
 
 # Function to print the results
 def print_forecast_results(forecast, periods=3):
@@ -84,14 +104,24 @@ def create_interactive_plots(model, forecast, df):
 
 # Main execution
 def main():
+    # Get the path to the CSV file
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    csv_path = os.path.join(current_dir, 'EGO_prices.csv')
+    
     # Read your CSV file
-    df = prepare_data('EGO_prices_20250115.csv')
+    df = prepare_data(csv_path)
     
     # Train the model
     model = train_prophet_model(df)
     
     # Make predictions
     forecast = make_predictions(model, periods=3)
+    
+    # Calculate and print MSE
+    mse, rmse = calculate_mse(forecast, df)
+    print(f"\nModel Performance:")
+    print(f"MSE: {mse:.4f}")
+    print(f"RMSE: {rmse:.4f}")
     
     # Print the numerical results
     print_forecast_results(forecast)

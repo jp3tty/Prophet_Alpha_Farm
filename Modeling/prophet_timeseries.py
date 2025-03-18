@@ -34,6 +34,7 @@ import logging
 
 # Suppress cmdstanpy logging
 logging.getLogger('cmdstanpy').setLevel(logging.ERROR)
+logging.getLogger('prophet').setLevel(logging.ERROR)
 
 class ProphetTimeSeriesModel(BaseTimeSeriesModel):
     def __init__(self, csv_path):
@@ -52,6 +53,7 @@ class ProphetTimeSeriesModel(BaseTimeSeriesModel):
         }
         self.best_params = None
         self.best_mse = float('inf')
+        self.baseline_mse = 15.0  # Static baseline MSE
 
     def train_model(self, **kwargs):
         """Train the Prophet model with optional grid search for hyperparameters."""
@@ -74,7 +76,10 @@ class ProphetTimeSeriesModel(BaseTimeSeriesModel):
         all_params = [dict(zip(self.param_grid.keys(), v)) 
                      for v in product(*self.param_grid.values())]
         
-        for params in tqdm(all_params, desc="Grid Search", leave=False):
+        print(f"\nStarting grid search with {len(all_params)} parameter combinations...")
+        print(f"Baseline MSE: {self.baseline_mse:.2f}")
+        
+        for params in tqdm(all_params, desc="Grid Search", position=0, leave=True, ncols=100):
             try:
                 # Create and train a new Prophet model with current parameters
                 current_model = Prophet(**params)
@@ -84,17 +89,60 @@ class ProphetTimeSeriesModel(BaseTimeSeriesModel):
                 forecast_df = self.make_predictions(model=current_model)
                 mse, rmse = self.calculate_mse(forecast_df, is_training=True)
                 
-                if mse < self.best_mse:
+                if mse < self.best_mse and mse < self.baseline_mse:
                     self.best_mse = mse
                     self.best_params = params
                     self.model = current_model
+                    print(f"\nNew best MSE found: {mse:.2f} (RMSE: {rmse:.2f})")
+                    print(f"Parameters: {params}")
+                    
+                    # Create and save plots for the new best model
+                    self.plot_forecast(forecast_df)
+                    self.plot_focused_forecast(forecast_df)
+                    
+                    # Create a plot specifically showing the MSE improvement
+                    fig = go.Figure()
+                    fig.add_trace(go.Indicator(
+                        mode="gauge+number",
+                        value=mse,
+                        title={'text': f"Current Best MSE: {mse:.2f}"},
+                        gauge={
+                            'axis': {'range': [0, self.baseline_mse]},
+                            'bar': {'color': "darkblue"},
+                            'steps': [
+                                {'range': [0, self.baseline_mse], 'color': "lightgray"}
+                            ],
+                            'threshold': {
+                                'line': {'color': "red", 'width': 4},
+                                'thickness': 0.75,
+                                'value': mse
+                            }
+                        }
+                    ))
+                    
+                    fig.update_layout(
+                        title=f'{self.stock_name} - MSE Progress (Baseline: {self.baseline_mse:.2f})',
+                        height=300
+                    )
+                    
+                    if self.output_dir:
+                        mse_plot_path = os.path.join(
+                            self.output_dir,
+                            f'{self.stock_name}_mse_progress.png'
+                        )
+                        fig.write_image(mse_plot_path)
+                        print(f"MSE progress plot saved: {mse_plot_path}")
+                    
             except Exception:
                 continue
         
         if self.model is not None:
             self.save_model('Prophet')
+            print(f"\nFinal best MSE: {self.best_mse:.2f}")
+            print(f"Best parameters: {self.best_params}")
             return self.best_mse
         else:
+            print("\nNo model found that beats the baseline MSE of 15.0")
             raise Exception("No valid model found during grid search")
 
     def make_predictions(self, periods=5, model=None):
