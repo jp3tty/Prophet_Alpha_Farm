@@ -30,6 +30,10 @@ from itertools import product
 from tqdm import tqdm
 import os
 import plotly.graph_objects as go
+import logging
+
+# Suppress cmdstanpy logging
+logging.getLogger('cmdstanpy').setLevel(logging.ERROR)
 
 class ProphetTimeSeriesModel(BaseTimeSeriesModel):
     def __init__(self, csv_path):
@@ -61,20 +65,16 @@ class ProphetTimeSeriesModel(BaseTimeSeriesModel):
                 self.model.fit(self.df)
                 forecast_df = self.make_predictions()
                 mse, rmse = self.calculate_mse(forecast_df, is_training=True)
-                print(f"Model trained with MSE: {mse:.2f}, RMSE: {rmse:.2f}")
                 self.save_model('Prophet')
                 return mse
             except Exception as e:
-                print(f"Error training model with provided parameters: {str(e)}")
                 return float('inf')
 
         # Otherwise perform grid search
         all_params = [dict(zip(self.param_grid.keys(), v)) 
                      for v in product(*self.param_grid.values())]
         
-        print(f"Grid searching through {len(all_params)} combinations...")
-        
-        for params in tqdm(all_params):
+        for params in tqdm(all_params, desc="Grid Search", leave=False):
             try:
                 # Create and train a new Prophet model with current parameters
                 current_model = Prophet(**params)
@@ -88,16 +88,10 @@ class ProphetTimeSeriesModel(BaseTimeSeriesModel):
                     self.best_mse = mse
                     self.best_params = params
                     self.model = current_model
-                    print(f"\nNew best MSE: {mse:.2f}, RMSE: {rmse:.2f}")
-                    print(f"Parameters: {params}")
-            except Exception as e:
-                print(f"Error with parameters {params}: {str(e)}")
+            except Exception:
                 continue
         
         if self.model is not None:
-            print("\nBest model parameters:")
-            print(self.best_params)
-            print(f"Best MSE: {self.best_mse:.2f}")
             self.save_model('Prophet')
             return self.best_mse
         else:

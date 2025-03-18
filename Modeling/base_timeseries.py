@@ -33,19 +33,12 @@ class BaseTimeSeriesModel:
         self.model = None
         self.forecast = None
         
-        # Extract stock name from csv path
         self.stock_name = os.path.splitext(os.path.basename(csv_path))[0].split('_')[0]
-        
-        # Set up output directory for model files
         self.output_dir = os.path.join(os.path.dirname(os.path.dirname(csv_path)), 'forecast_output')
         os.makedirs(self.output_dir, exist_ok=True)
 
     def save_model(self, model_type):
-        """Save the trained model to a pickle file.
-        
-        Args:
-            model_type (str): Type of model (e.g., 'Prophet', 'SARIMA', 'Theta')
-        """
+        """Save the trained model to a pickle file."""
         if self.model is None:
             raise ValueError("No model to save. Train the model first.")
             
@@ -55,115 +48,48 @@ class BaseTimeSeriesModel:
         
         with open(filepath, 'wb') as f:
             pickle.dump(self.model, f)
-        print(f"Model saved to {filepath}")
         return filepath
 
     def prepare_data(self, max_training_days=None):
-        """Read and prepare the stock data.
-        
-        Args:
-            max_training_days: If provided, limit training data to last N days
-        """
-        # Read data
+        """Read and prepare the stock data."""
         self.df = pd.read_csv(self.csv_path)
         self.df = self.df.rename(columns={'Date': 'ds', 'Price': 'y'})
         self.df['ds'] = pd.to_datetime(self.df['ds'])
-        
-        # Sort by date
         self.df = self.df.sort_values('ds')
         
-        # Print data info
-        total_days = len(self.df)
-        date_range = (self.df['ds'].max() - self.df['ds'].min()).days
-        price_range = f"${self.df['y'].min():.2f} - ${self.df['y'].max():.2f}"
-        
-        print("\nData Summary:")
-        print(f"Total data points: {total_days}")
-        print(f"Date range: {date_range} days")
-        print(f"Price range: {price_range}")
-        
-        # Optionally limit training data
         if max_training_days is not None and max_training_days < len(self.df):
             self.df = self.df.tail(max_training_days)
-            print(f"Limited to last {max_training_days} days for training")
         
         return self.df
 
     def calculate_mse(self, forecast_df, is_training=False):
-        """Calculate Mean Squared Error for the forecast.
-        
-        Args:
-            forecast_df: DataFrame with predictions
-            is_training: If True, calculates MSE on training data, else on forecast
-        """
+        """Calculate Mean Squared Error for the forecast."""
         try:
             if is_training:
-                # For training evaluation, use last 30 days
                 last_30_days = self.df.tail(30)
                 comparison_df = forecast_df[forecast_df['ds'].isin(last_30_days['ds'])]
-                
-                if len(comparison_df) == 0:
-                    print("Warning: No overlapping dates found for MSE calculation")
-                    return float('inf'), float('inf')
-                
-                # Calculate squared differences
-                squared_diff = (comparison_df['yhat'].values - last_30_days['y'].values) ** 2
-                
-                # Remove any NaN values
-                squared_diff = squared_diff[~np.isnan(squared_diff)]
-                
-                if len(squared_diff) == 0:
-                    print("Warning: No valid comparisons after removing NaN values")
-                    return float('inf'), float('inf')
-                
-                mse = np.mean(squared_diff)
-                rmse = np.sqrt(mse)
-                
-                # Print some debug info
-                print(f"\nMSE Calculation (Training):")
-                print(f"Number of comparison points: {len(squared_diff)}")
-                print(f"Average actual price: ${last_30_days['y'].mean():.2f}")
-                print(f"Average predicted price: ${comparison_df['yhat'].mean():.2f}")
-                print(f"MSE: {mse:.2f}")
-                print(f"RMSE: ${rmse:.2f} (average prediction error)")
-                
             else:
-                # For forecast evaluation, use only overlapping dates
                 comparison_df = forecast_df.merge(
                     self.df[['ds', 'y']], 
                     on='ds', 
                     how='inner'
                 )
                 
-                if len(comparison_df) == 0:
-                    print("Warning: No overlapping dates found for MSE calculation")
-                    return float('inf'), float('inf')
-                
-                # Calculate squared differences
-                squared_diff = (comparison_df['yhat'] - comparison_df['y']) ** 2
-                
-                # Remove any NaN values
-                squared_diff = squared_diff[~np.isnan(squared_diff)]
-                
-                if len(squared_diff) == 0:
-                    print("Warning: No valid comparisons after removing NaN values")
-                    return float('inf'), float('inf')
-                
-                mse = np.mean(squared_diff)
-                rmse = np.sqrt(mse)
-                
-                # Print some debug info
-                print(f"\nMSE Calculation (Forecast):")
-                print(f"Number of comparison points: {len(squared_diff)}")
-                print(f"Average actual price: ${comparison_df['y'].mean():.2f}")
-                print(f"Average predicted price: ${comparison_df['yhat'].mean():.2f}")
-                print(f"MSE: {mse:.2f}")
-                print(f"RMSE: ${rmse:.2f} (average prediction error)")
+            if len(comparison_df) == 0:
+                return float('inf'), float('inf')
+            
+            squared_diff = (comparison_df['yhat'].values - comparison_df['y'].values) ** 2
+            squared_diff = squared_diff[~np.isnan(squared_diff)]
+            
+            if len(squared_diff) == 0:
+                return float('inf'), float('inf')
+            
+            mse = np.mean(squared_diff)
+            rmse = np.sqrt(mse)
             
             return mse, rmse
             
         except Exception as e:
-            print(f"Error in calculate_mse: {str(e)}")
             return float('inf'), float('inf')
 
     def plot_forecast(self, forecast_df):
@@ -171,7 +97,6 @@ class BaseTimeSeriesModel:
         try:
             fig = go.Figure()
 
-            # Plot historical data
             fig.add_trace(go.Scatter(
                 x=self.df['ds'],
                 y=self.df['y'],
@@ -179,7 +104,6 @@ class BaseTimeSeriesModel:
                 mode='lines'
             ))
 
-            # Plot forecast
             fig.add_trace(go.Scatter(
                 x=forecast_df['ds'],
                 y=forecast_df['yhat'],
@@ -201,9 +125,7 @@ class BaseTimeSeriesModel:
                     f'{self.stock_name}_{self.__class__.__name__}_forecast.png'
                 )
                 fig.write_image(plot_path)
-                print(f"Plot saved: {plot_path}")
 
             return fig
         except Exception as e:
-            print(f"Error creating plot: {str(e)}")
             return None

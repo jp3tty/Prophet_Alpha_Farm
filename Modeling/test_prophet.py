@@ -1,64 +1,49 @@
 from prophet_timeseries import ProphetTimeSeriesModel
 import os
+from tqdm import tqdm
 
-def test_prophet_model(max_training_days=90):  # Default to 90 days of training data
-    """Test Prophet model with specified amount of training data.
-    
-    Args:
-        max_training_days: Number of days of historical data to use for training
-    """
-    # Set up paths
+def test_prophet_model(max_training_days=90):
+    """Test Prophet model with specified amount of training data."""
     data_dir = "Data"
     output_dir = "Output/Prophet"
     
-    # Create output directory if it doesn't exist
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
     
-    # Get all CSV files
     csv_files = [f for f in os.listdir(data_dir) if f.endswith('_prices.csv')]
+    total_files = len(csv_files)
     
-    for csv_file in csv_files:
-        print(f"\nTesting Prophet model on {csv_file}")
-        print(f"Using {max_training_days} days for training")
+    # Create progress bar for overall progress
+    pbar = tqdm(csv_files, desc="Processing stocks", unit="stock")
+    
+    for csv_file in pbar:
+        pbar.set_description(f"Processing {csv_file}")
         
-        # Initialize model
         csv_path = os.path.join(data_dir, csv_file)
         model = ProphetTimeSeriesModel(csv_path)
         model.output_dir = output_dir
         
         try:
-            # Prepare data with specified training window
             model.prepare_data(max_training_days=max_training_days)
-            print("Data prepared successfully")
-            
-            # Train model
             model.train_model()
-            print("Model trained successfully")
-            
-            # Make predictions
             forecast = model.make_predictions(periods=5)
-            print("\nForecast for next 5 days:")
-            print(forecast.tail())
             
-            # Calculate training MSE (using last 30 days)
+            # Calculate metrics
             train_mse, train_rmse = model.calculate_mse(forecast, is_training=True)
-            print(f"\nTraining Metrics (last 30 days):")
-            print(f"MSE: {train_mse:.2f}")
-            print(f"RMSE: ${train_rmse:.2f}")
-            
-            # Calculate prediction MSE (if we have actual data to compare)
             pred_mse, pred_rmse = model.calculate_mse(forecast, is_training=False)
-            print(f"\nPrediction Metrics:")
-            print(f"MSE: {pred_mse:.2f}")
-            print(f"RMSE: ${pred_rmse:.2f}")
             
-            # Create plot
+            # Create plot silently
             model.plot_forecast(forecast)
             
+            # Update progress bar with metrics
+            pbar.set_postfix({
+                'Train RMSE': f'${train_rmse:.2f}',
+                'Pred RMSE': f'${pred_rmse:.2f}'
+            })
+            
         except Exception as e:
-            print(f"Error processing {csv_file}: {str(e)}")
+            pbar.set_postfix({'Error': str(e)})
+            continue
 
 if __name__ == "__main__":
-    # You can change the training window here
-    test_prophet_model(max_training_days=90)  # Using 90 days by default 
+    test_prophet_model(max_training_days=90) 
