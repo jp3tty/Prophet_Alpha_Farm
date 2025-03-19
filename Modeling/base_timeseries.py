@@ -65,16 +65,13 @@ class BaseTimeSeriesModel:
     def calculate_mse(self, forecast_df, is_training=False):
         """Calculate Mean Squared Error for the forecast."""
         try:
-            if is_training:
-                last_30_days = self.df.tail(30)
-                comparison_df = forecast_df[forecast_df['ds'].isin(last_30_days['ds'])]
-            else:
-                comparison_df = forecast_df.merge(
-                    self.df[['ds', 'y']], 
-                    on='ds', 
-                    how='inner'
-                )
-                
+            # Use the simpler approach from prophet_EGO.py
+            comparison_df = forecast_df.merge(
+                self.df[['ds', 'y']], 
+                on='ds', 
+                how='inner'
+            )
+            
             if len(comparison_df) == 0:
                 return float('inf'), float('inf')
             
@@ -87,9 +84,12 @@ class BaseTimeSeriesModel:
             mse = np.mean(squared_diff)
             rmse = np.sqrt(mse)
             
+            print(f"DEBUG - Number of points in comparison: {len(comparison_df)}, MSE: {mse:.4f}")
+            
             return mse, rmse
             
         except Exception as e:
+            print(f"Error in calculate_mse: {str(e)}")
             return float('inf'), float('inf')
 
     def plot_forecast(self, forecast_df):

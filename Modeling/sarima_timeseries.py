@@ -115,26 +115,53 @@ class SarimaTimeSeriesModel(BaseTimeSeriesModel):
         # Generate forecast
         forecast_values = model.forecast(periods)
 
-        # Create forecast DataFrame
+        # Create forecast DataFrame with proper index
         self.forecast = pd.DataFrame({
             'ds': future_dates,
             'yhat': forecast_values
         })
 
+        # Include historical data in the forecast for MSE calculation
+        historical_dates = self.df['ds'].tolist()
+        historical_fitted = model.fittedvalues
+        
+        # Create a complete forecast that includes both historical fitted values and future forecasts
+        complete_forecast = pd.DataFrame({
+            'ds': historical_dates + future_dates.tolist(),
+            'yhat': np.concatenate([historical_fitted, forecast_values])
+        })
+        
+        self.forecast = complete_forecast
+        
+        print(f"DEBUG - SARIMA: Generated forecast with {len(complete_forecast)} points")
+        
         return self.forecast
 
     def calculate_mse(self, forecast_df, is_training=False):
         """Calculate Mean Squared Error for the forecast."""
         try:
-            # Get the last 30 days of actual data for comparison
-            last_30_days = self.df.tail(30)
+            # Use the consistent approach similar to Prophet model
+            comparison_df = forecast_df.merge(
+                self.df[['ds', 'y']], 
+                on='ds', 
+                how='inner'
+            )
             
-            # Get model predictions for the last 30 days
-            predictions = np.exp(forecast_df['yhat'].values)
+            if len(comparison_df) == 0:
+                print("No matching dates found for MSE calculation")
+                return float('inf'), float('inf')
             
-            # Calculate MSE and RMSE
-            mse = np.mean((last_30_days['y'].values - predictions)**2)
+            squared_diff = (comparison_df['yhat'].values - comparison_df['y'].values) ** 2
+            squared_diff = squared_diff[~np.isnan(squared_diff)]
+            
+            if len(squared_diff) == 0:
+                print("No valid squared differences for MSE calculation")
+                return float('inf'), float('inf')
+            
+            mse = np.mean(squared_diff)
             rmse = np.sqrt(mse)
+            
+            print(f"DEBUG - SARIMA: Number of points in comparison: {len(comparison_df)}, MSE: {mse:.4f}")
             
             if is_training:
                 self.mse = mse
@@ -144,7 +171,7 @@ class SarimaTimeSeriesModel(BaseTimeSeriesModel):
             
         except Exception as e:
             print(f"Error in calculate_mse: {str(e)}")
-            return None, None
+            return float('inf'), float('inf')
 
     def plot_forecast(self, forecast_df):
         """Create and save forecast plot."""

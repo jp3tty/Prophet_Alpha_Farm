@@ -30,7 +30,9 @@ from itertools import product
 from tqdm import tqdm
 import os
 import plotly.graph_objects as go
+from prophet.plot import plot_plotly, plot_components_plotly
 import logging
+from datetime import datetime
 
 # Suppress cmdstanpy logging
 logging.getLogger('cmdstanpy').setLevel(logging.ERROR)
@@ -39,21 +41,31 @@ logging.getLogger('prophet').setLevel(logging.ERROR)
 class ProphetTimeSeriesModel(BaseTimeSeriesModel):
     def __init__(self, csv_path):
         super().__init__(csv_path)
+        # Define the exact parameters from prophet_EGO.py to ensure we try them first
+        self.ego_params = {
+            'changepoint_prior_scale': 0.05,
+            'seasonality_prior_scale': 10,
+            'daily_seasonality': True,
+            'weekly_seasonality': True,
+            'yearly_seasonality': True
+        }
+        
         self.param_grid = {
-            'changepoint_prior_scale': [0.5, 1.2, 0.6, 0.75, 0.9, 1, 1.2],
-            'seasonality_prior_scale': [2, 7, 3, 5, 6, 7],
+            'changepoint_prior_scale': [0.05, 0.5, 0.1, 0.2],  # Include 0.05 from prophet_EGO
+            'seasonality_prior_scale': [10, 2, 5, 7],  # Include 10 from prophet_EGO
             'holidays_prior_scale': [0.01],
             'seasonality_mode': ['multiplicative'],
             'interval_width': [0.05, 0.1, 0.15],
             'growth': ['linear'],
-            'n_changepoints': [35, 70, 40, 45, 50, 55, 60, 65, 70],
-            'daily_seasonality': [True],
-            'weekly_seasonality': [False],
-            'yearly_seasonality': [True]
+            'n_changepoints': [25, 35, 45],
+            'daily_seasonality': [True],  # Match prophet_EGO
+            'weekly_seasonality': [True],  # Match prophet_EGO
+            'yearly_seasonality': [True]  # Match prophet_EGO
         }
         self.best_params = None
         self.best_mse = float('inf')
         self.baseline_mse = 15.0  # Static baseline MSE
+        self.mse_history = []  # Track MSE history during grid search
 
     def train_model(self, **kwargs):
         """Train the Prophet model with optional grid search for hyperparameters."""
@@ -72,6 +84,28 @@ class ProphetTimeSeriesModel(BaseTimeSeriesModel):
             except Exception as e:
                 return float('inf')
 
+        # First, try the exact prophet_EGO.py parameters
+        print(f"\nTrying prophet_EGO.py parameters first...")
+        try:
+            ego_model = Prophet(**self.ego_params)
+            ego_model.fit(self.df)
+            forecast_df = self.make_predictions(model=ego_model)
+            mse, rmse = self.calculate_mse(forecast_df, is_training=True)
+            
+            print(f"EGO parameters MSE: {mse:.4f}, RMSE: {rmse:.4f}")
+            
+            if mse < self.best_mse and mse < self.baseline_mse:
+                self.best_mse = mse
+                self.best_params = self.ego_params
+                self.model = ego_model
+                print(f"prophet_EGO.py parameters beat baseline with MSE: {mse:.4f}")
+                self.create_and_save_plots(forecast_df)
+                self.save_model('Prophet')
+                self.save_mse_history()
+                return self.best_mse
+        except Exception as e:
+            print(f"Error with prophet_EGO.py parameters: {str(e)}")
+        
         # Otherwise perform grid search
         all_params = [dict(zip(self.param_grid.keys(), v)) 
                      for v in product(*self.param_grid.values())]
@@ -89,6 +123,14 @@ class ProphetTimeSeriesModel(BaseTimeSeriesModel):
                 forecast_df = self.make_predictions(model=current_model)
                 mse, rmse = self.calculate_mse(forecast_df, is_training=True)
                 
+                # Record MSE history
+                self.mse_history.append({
+                    'timestamp': datetime.now(),
+                    'mse': mse,
+                    'rmse': rmse,
+                    'params': params
+                })
+                
                 if mse < self.best_mse and mse < self.baseline_mse:
                     self.best_mse = mse
                     self.best_params = params
@@ -97,53 +139,82 @@ class ProphetTimeSeriesModel(BaseTimeSeriesModel):
                     print(f"Parameters: {params}")
                     
                     # Create and save plots for the new best model
-                    self.plot_forecast(forecast_df)
-                    self.plot_focused_forecast(forecast_df)
-                    
-                    # Create a plot specifically showing the MSE improvement
-                    fig = go.Figure()
-                    fig.add_trace(go.Indicator(
-                        mode="gauge+number",
-                        value=mse,
-                        title={'text': f"Current Best MSE: {mse:.2f}"},
-                        gauge={
-                            'axis': {'range': [0, self.baseline_mse]},
-                            'bar': {'color': "darkblue"},
-                            'steps': [
-                                {'range': [0, self.baseline_mse], 'color': "lightgray"}
-                            ],
-                            'threshold': {
-                                'line': {'color': "red", 'width': 4},
-                                'thickness': 0.75,
-                                'value': mse
-                            }
-                        }
-                    ))
-                    
-                    fig.update_layout(
-                        title=f'{self.stock_name} - MSE Progress (Baseline: {self.baseline_mse:.2f})',
-                        height=300
-                    )
-                    
-                    if self.output_dir:
-                        mse_plot_path = os.path.join(
-                            self.output_dir,
-                            f'{self.stock_name}_mse_progress.png'
-                        )
-                        fig.write_image(mse_plot_path)
-                        print(f"MSE progress plot saved: {mse_plot_path}")
+                    self.create_and_save_plots(forecast_df)
                     
             except Exception:
                 continue
         
         if self.model is not None:
             self.save_model('Prophet')
+            self.save_mse_history()
             print(f"\nFinal best MSE: {self.best_mse:.2f}")
             print(f"Best parameters: {self.best_params}")
             return self.best_mse
         else:
             print("\nNo model found that beats the baseline MSE of 15.0")
             raise Exception("No valid model found during grid search")
+
+    def create_and_save_plots(self, forecast_df):
+        """Create and save all plots for the current best model."""
+        # Create the main forecast plot
+        fig_forecast = plot_plotly(self.model, forecast_df, xlabel='Date', ylabel='Stock Price ($)')
+        fig_forecast.update_layout(title=f'{self.stock_name} Stock Price Forecast',
+                                 showlegend=True)
+        
+        # Create the components plot
+        fig_components = plot_components_plotly(self.model, forecast_df)
+        fig_components.update_layout(title=f'{self.stock_name} - Model Components')
+        
+        # Create custom price change distribution plot
+        returns = self.df['y'].pct_change().dropna()
+        fig_dist = go.Figure()
+        fig_dist.add_trace(go.Histogram(x=returns, 
+                                      nbinsx=50,
+                                      name='Daily Returns',
+                                      showlegend=True))
+        fig_dist.update_layout(title=f'{self.stock_name} - Distribution of Daily Price Changes',
+                              xaxis_title='Daily Return',
+                              yaxis_title='Frequency',
+                              bargap=0.1)
+        
+        # Save all plots
+        if self.output_dir:
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            
+            # Save forecast plot
+            forecast_path = os.path.join(
+                self.output_dir,
+                f'{self.stock_name}_forecast_{timestamp}.png'
+            )
+            fig_forecast.write_image(forecast_path)
+            
+            # Save components plot
+            components_path = os.path.join(
+                self.output_dir,
+                f'{self.stock_name}_components_{timestamp}.png'
+            )
+            fig_components.write_image(components_path)
+            
+            # Save distribution plot
+            dist_path = os.path.join(
+                self.output_dir,
+                f'{self.stock_name}_distribution_{timestamp}.png'
+            )
+            fig_dist.write_image(dist_path)
+            
+            print(f"Plots saved with timestamp: {timestamp}")
+
+    def save_mse_history(self):
+        """Save the MSE history to a CSV file."""
+        if self.mse_history and self.output_dir:
+            df_history = pd.DataFrame(self.mse_history)
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            history_path = os.path.join(
+                self.output_dir,
+                f'{self.stock_name}_mse_history_{timestamp}.csv'
+            )
+            df_history.to_csv(history_path, index=False)
+            print(f"MSE history saved to: {history_path}")
 
     def make_predictions(self, periods=5, model=None):
         """Generate predictions for the specified number of periods."""
@@ -160,138 +231,4 @@ class ProphetTimeSeriesModel(BaseTimeSeriesModel):
         if model == self.model:
             self.forecast = forecast
             
-        return forecast
-
-    def plot_forecast(self, forecast_df):
-        """Create and save forecast plot."""
-        try:
-            # Create full plot
-            fig = go.Figure()
-
-            # Plot historical data (last 14 days for visualization)
-            historical_data = self.df.tail(14)
-            fig.add_trace(go.Scatter(
-                x=historical_data['ds'],
-                y=historical_data['y'],
-                name='Historical Data',
-                mode='lines',
-                line=dict(color='blue', width=2)
-            ))
-
-            # Get only the future predictions (next 5 days)
-            future_data = forecast_df[forecast_df['ds'] > self.df['ds'].iloc[-1]]
-            fig.add_trace(go.Scatter(
-                x=future_data['ds'],
-                y=future_data['yhat'],
-                name='Forecast',
-                mode='lines',
-                line=dict(color='red', dash='dot', width=2)
-            ))
-
-            # Add last known price point
-            last_known_price = self.df['y'].iloc[-1]
-            last_known_date = self.df['ds'].iloc[-1]
-            fig.add_trace(go.Scatter(
-                x=[last_known_date],
-                y=[last_known_price],
-                name='Last Known Price',
-                mode='markers',
-                marker=dict(color='black', size=10, symbol='circle')
-            ))
-
-            # Calculate x-axis range
-            min_date = historical_data['ds'].min()
-            # Add 2 days to the last prediction date
-            max_date = future_data['ds'].max() + pd.Timedelta(days=2)
-
-            # Update layout
-            fig.update_layout(
-                title=f'{self.stock_name} Stock Price Forecast',
-                xaxis_title='Date',
-                yaxis_title='Stock Price ($)',
-                showlegend=True,
-                xaxis=dict(
-                    type='date',
-                    tickformat='%Y-%m-%d',
-                    tickangle=45,
-                    range=[min_date, max_date]  # Set explicit range
-                ),
-                yaxis=dict(
-                    tickprefix='$',
-                    tickformat='.2f'
-                ),
-                hovermode='x unified'
-            )
-
-            # Save plot if output directory exists
-            if self.output_dir:
-                plot_path = os.path.join(
-                    self.output_dir, 
-                    f'{self.stock_name}_{self.__class__.__name__}_forecast.png'
-                )
-                fig.write_image(plot_path)
-                print(f"Plot saved: {plot_path}")
-
-            return fig
-        except Exception as e:
-            print(f"Error creating plot: {str(e)}")
-            return None
-
-    def plot_focused_forecast(self, forecast_df):
-        """Create and save a focused plot of last 5 days and next 5 days."""
-        try:
-            fig = go.Figure()
-
-            # Plot last 5 days of historical data
-            last_5_days = self.df.tail(5)
-            fig.add_trace(go.Scatter(
-                x=last_5_days['ds'],
-                y=last_5_days['y'],
-                name='Last 5 Days',
-                mode='lines+markers',
-                line=dict(color='blue')
-            ))
-
-            # Plot next 5 days forecast
-            fig.add_trace(go.Scatter(
-                x=forecast_df['ds'],
-                y=forecast_df['yhat'],
-                name='Next 5 Days',
-                mode='lines+markers',
-                line=dict(dash='dash', color='red')
-            ))
-
-            # Add last known price point
-            last_known_price = self.df['y'].iloc[-1]
-            last_known_date = self.df['ds'].iloc[-1]
-            fig.add_trace(go.Scatter(
-                x=[last_known_date],
-                y=[last_known_price],
-                name='Last Known Price',
-                mode='markers',
-                marker=dict(size=10, color='red')
-            ))
-
-            fig.update_layout(
-                title=f'{self.stock_name} Stock Price - Last 5 Days & Next 5 Days<br>Prophet Model',
-                xaxis_title='Date',
-                yaxis_title='Stock Price ($)',
-                showlegend=True,
-                xaxis=dict(
-                    tickangle=45,
-                    tickformat='%Y-%m-%d'
-                )
-            )
-
-            if self.output_dir:
-                plot_path = os.path.join(
-                    self.output_dir, 
-                    f'{self.stock_name}_prophet_focused_forecast.png'
-                )
-                fig.write_image(plot_path)
-                print(f"Focused plot saved: {plot_path}")
-
-            return fig
-        except Exception as e:
-            print(f"Error creating focused plot: {str(e)}")
-            return None 
+        return forecast 

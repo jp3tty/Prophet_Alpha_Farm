@@ -108,10 +108,15 @@ class StockModelComparison:
                 model.train_model()
                 forecast = model.make_predictions(periods=5)
                 
-                # Calculate MSE differently for Theta model
+                # Calculate MSE differently based on model type
                 if model_name == 'Theta':
                     values = model.df['y'].values
-                    mse, rmse = model.calculate_mse(values, model.best_params)
+                    if hasattr(model, 'best_params') and model.best_params is not None:
+                        mse, rmse = model.calculate_mse(values, model.best_params)
+                    else:
+                        # Fallback if best_params isn't available
+                        mse, rmse = float('inf'), float('inf')
+                        print(f"Warning: No best_params found for Theta model on {stock_symbol}")
                 else:
                     mse, rmse = model.calculate_mse(forecast)
                 
@@ -126,6 +131,7 @@ class StockModelComparison:
                 
                 # Generate and save plot
                 model.plot_forecast(forecast)
+                print(f"Completed {model_name} model for {stock_symbol} with MSE: {mse:.4f}, RMSE: {rmse:.4f}")
 
             except Exception as e:
                 print(f"Error in {model_name} model for {stock_symbol}: {str(e)}")
