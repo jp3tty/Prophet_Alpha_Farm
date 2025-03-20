@@ -156,10 +156,15 @@ class ProphetTimeSeriesModel(BaseTimeSeriesModel):
 
     def create_and_save_plots(self, forecast_df):
         """Create and save all plots for the current best model."""
-        # Create the main forecast plot
+        # Create the main forecast plot with rangeslider disabled
         fig_forecast = plot_plotly(self.model, forecast_df, xlabel='Date', ylabel='Stock Price ($)')
-        fig_forecast.update_layout(title=f'{self.stock_name} Stock Price Forecast',
-                                 showlegend=True)
+        
+        # Remove the secondary plot (rangeslider) at the bottom
+        fig_forecast.update_layout(
+            title=f'{self.stock_name} Stock Price Forecast',
+            showlegend=True,
+            xaxis=dict(rangeslider=dict(visible=False))  # This disables the rangeslider/secondary plot
+        )
         
         # Create the components plot
         fig_components = plot_components_plotly(self.model, forecast_df)
@@ -176,6 +181,9 @@ class ProphetTimeSeriesModel(BaseTimeSeriesModel):
                               xaxis_title='Daily Return',
                               yaxis_title='Frequency',
                               bargap=0.1)
+        
+        # Create focused forecast plot
+        fig_focused = self.plot_focused_forecast(forecast_df)
         
         # Save all plots
         if self.output_dir:
@@ -202,7 +210,87 @@ class ProphetTimeSeriesModel(BaseTimeSeriesModel):
             )
             fig_dist.write_image(dist_path)
             
+            # Save focused forecast plot
+            if fig_focused:
+                focused_path = os.path.join(
+                    self.output_dir,
+                    f'{self.stock_name}_focused_forecast_{timestamp}.png'
+                )
+                fig_focused.write_image(focused_path)
+                print(f"Focused plot saved: {focused_path}")
+            
             print(f"Plots saved with timestamp: {timestamp}")
+
+    def plot_focused_forecast(self, forecast_df):
+        """Create a focused plot of last 5 days and next 5 days."""
+        try:
+            fig = go.Figure()
+
+            # Plot last 5 days of historical data
+            last_5_days = self.df.tail(5)
+            fig.add_trace(go.Scatter(
+                x=last_5_days['ds'],
+                y=last_5_days['y'],
+                name='Historical Data',
+                mode='markers',
+                marker=dict(color='black', size=5)
+            ))
+
+            # Plot next 5 days forecast
+            next_5_days = forecast_df[forecast_df['ds'] > self.df['ds'].max()].head(5)
+            fig.add_trace(go.Scatter(
+                x=next_5_days['ds'],
+                y=next_5_days['yhat'],
+                name='Forecast',
+                mode='lines',
+                line=dict(color='blue', width=2)
+            ))
+            
+            # Add confidence intervals if available
+            if 'yhat_lower' in forecast_df.columns and 'yhat_upper' in forecast_df.columns:
+                fig.add_trace(go.Scatter(
+                    x=next_5_days['ds'],
+                    y=next_5_days['yhat_upper'],
+                    mode='lines',
+                    line=dict(width=0),
+                    showlegend=False
+                ))
+                fig.add_trace(go.Scatter(
+                    x=next_5_days['ds'],
+                    y=next_5_days['yhat_lower'],
+                    mode='lines',
+                    line=dict(width=0),
+                    fill='tonexty',
+                    fillcolor='rgba(68, 68, 255, 0.2)',
+                    name='Confidence Interval'
+                ))
+
+            # Add last known price point
+            last_known_price = self.df['y'].iloc[-1]
+            last_known_date = self.df['ds'].iloc[-1]
+            fig.add_trace(go.Scatter(
+                x=[last_known_date],
+                y=[last_known_price],
+                name='Last Known Price',
+                mode='markers',
+                marker=dict(size=10, color='red')
+            ))
+
+            fig.update_layout(
+                title=f'{self.stock_name} Stock Price - Last 5 Days & Next 5 Days<br>Prophet Model',
+                xaxis_title='Date',
+                yaxis_title='Stock Price ($)',
+                showlegend=True,
+                xaxis=dict(
+                    tickangle=45,
+                    tickformat='%Y-%m-%d'
+                )
+            )
+
+            return fig
+        except Exception as e:
+            print(f"Error creating focused forecast plot: {str(e)}")
+            return None
 
     def save_mse_history(self):
         """Save the MSE history to a CSV file."""

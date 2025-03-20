@@ -97,26 +97,49 @@ class BaseTimeSeriesModel:
         try:
             fig = go.Figure()
 
+            # Historical data as scatter plot (black dots)
             fig.add_trace(go.Scatter(
                 x=self.df['ds'],
                 y=self.df['y'],
                 name='Historical Data',
-                mode='lines'
+                mode='markers',
+                marker=dict(color='black', size=3)
             ))
 
+            # Forecast as blue line
             fig.add_trace(go.Scatter(
                 x=forecast_df['ds'],
                 y=forecast_df['yhat'],
                 name='Forecast',
-                mode='lines+markers',
-                line=dict(dash='dash')
+                mode='lines',
+                line=dict(color='blue', width=2)
             ))
+            
+            # Add confidence intervals if available in the forecast dataframe
+            if 'yhat_lower' in forecast_df.columns and 'yhat_upper' in forecast_df.columns:
+                fig.add_trace(go.Scatter(
+                    x=forecast_df['ds'],
+                    y=forecast_df['yhat_upper'],
+                    mode='lines',
+                    line=dict(width=0),
+                    showlegend=False
+                ))
+                fig.add_trace(go.Scatter(
+                    x=forecast_df['ds'],
+                    y=forecast_df['yhat_lower'],
+                    mode='lines',
+                    line=dict(width=0),
+                    fill='tonexty',
+                    fillcolor='rgba(68, 68, 255, 0.2)',
+                    name='Confidence Interval'
+                ))
 
             fig.update_layout(
                 title=f'{self.stock_name} Stock Price Forecast - {self.__class__.__name__}',
                 xaxis_title='Date',
                 yaxis_title='Stock Price ($)',
-                showlegend=True
+                showlegend=True,
+                xaxis=dict(rangeslider=dict(visible=False))  # Disable rangeslider
             )
 
             if self.output_dir:
@@ -128,4 +151,5 @@ class BaseTimeSeriesModel:
 
             return fig
         except Exception as e:
+            print(f"Error in plot_forecast: {str(e)}")
             return None
