@@ -28,6 +28,12 @@ import numpy as np
 from datetime import timedelta
 import os
 import plotly.graph_objects as go
+import warnings
+import json
+import logging
+import itertools
+from tqdm import tqdm
+from visualizations import TimeSeriesPlotter
 
 class SarimaTimeSeriesModel(BaseTimeSeriesModel):
     def __init__(self, csv_path):
@@ -155,23 +161,40 @@ class SarimaTimeSeriesModel(BaseTimeSeriesModel):
             freq='B'  # Business days
         )
 
-        # Generate forecast
+        # Generate forecast with confidence intervals
         forecast_values = model.forecast(periods)
+        
+        # Get prediction intervals (confidence intervals)
+        # Default alpha=0.05 gives 95% confidence interval
+        pred_intervals = model.get_forecast(periods).conf_int(alpha=0.05)
+        lower_bound = pred_intervals.iloc[:, 0]  # Lower bound column
+        upper_bound = pred_intervals.iloc[:, 1]  # Upper bound column
 
         # Create forecast DataFrame with proper index
         self.forecast = pd.DataFrame({
             'ds': future_dates,
-            'yhat': forecast_values
+            'yhat': forecast_values,
+            'yhat_lower': lower_bound.values,
+            'yhat_upper': upper_bound.values
         })
 
         # Include historical data in the forecast for MSE calculation
         historical_dates = self.df['ds'].tolist()
         historical_fitted = model.fittedvalues
         
+        # For historical data, we can approximate confidence intervals
+        # by using the standard error of the residuals
+        residuals = self.df['y'].values - historical_fitted
+        std_error = np.std(residuals)
+        historical_lower = historical_fitted - 1.96 * std_error  # 95% confidence interval
+        historical_upper = historical_fitted + 1.96 * std_error
+        
         # Create a complete forecast that includes both historical fitted values and future forecasts
         complete_forecast = pd.DataFrame({
             'ds': historical_dates + future_dates.tolist(),
-            'yhat': np.concatenate([historical_fitted, forecast_values])
+            'yhat': np.concatenate([historical_fitted, forecast_values]),
+            'yhat_lower': np.concatenate([historical_lower, lower_bound.values]),
+            'yhat_upper': np.concatenate([historical_upper, upper_bound.values])
         })
         
         self.forecast = complete_forecast
@@ -216,229 +239,75 @@ class SarimaTimeSeriesModel(BaseTimeSeriesModel):
             print(f"Error in calculate_mse: {str(e)}")
             return float('inf'), float('inf')
 
-    def plot_forecast(self, forecast_df):
-        """Create and save forecast plot."""
+    def plot_forecast(self, forecast_df, output_dir=None):
+        """
+        Create and save a forecast plot for the stock price.
+        
+        Args:
+            forecast_df (pd.DataFrame): Forecast DataFrame.
+            output_dir (str, optional): Directory to save the plot. Defaults to None.
+        """
         try:
-            # Create full plot
-            fig = go.Figure()
-
-            # Plot historical data (last 60 days for better visualization)
-            historical_data = self.df.tail(60)
-            fig.add_trace(go.Scatter(
-                x=historical_data['ds'],
-                y=historical_data['y'],
-                name='Historical Data',
-                mode='markers',
-                marker=dict(color='black', size=6)
-            ))
-
-            # Plot forecast
-            fig.add_trace(go.Scatter(
-                x=forecast_df['ds'],
-                y=forecast_df['yhat'],
-                name='Forecast',
-                mode='lines',
-                line=dict(color='blue', width=2)
-            ))
-
-            # Add last known price point
-            last_known_price = self.df['y'].iloc[-1]
-            last_known_date = self.df['ds'].iloc[-1]
-            fig.add_trace(go.Scatter(
-                x=[last_known_date],
-                y=[last_known_price],
-                name='Last Known Price',
-                mode='markers',
-                marker=dict(size=10, color='red')
-            ))
-
-            fig.update_layout(
-                title=f'{self.stock_name} Stock Price Forecast - SARIMA Model<br>MSE: {self.mse:.4f}',
-                xaxis_title='Date',
-                yaxis_title='Stock Price ($)',
-                showlegend=True
-            )
-
-            if self.output_dir:
-                plot_path = os.path.join(
-                    self.output_dir, 
-                    f'{self.stock_name}_sarima_forecast.png'
-                )
-                fig.write_image(plot_path)
-                print(f"Plot saved: {plot_path}")
-
-            # Create focused plot
-            self.plot_focused_forecast(forecast_df)
+            # Use the unified plotter for creating plots
+            output_dir = output_dir or self.output_dir
+            plotter = TimeSeriesPlotter(output_dir=output_dir)
             
+            # Generate the main forecast plot
+            fig = plotter.plot_forecast(
+                df=self.df,
+                forecast_df=forecast_df,
+                stock_name=self.stock_name,
+                model_name='SARIMA',
+                mse=self.mse
+            )
+            
+            # Generate the focused forecast plot
+            plotter.plot_focused_forecast(
+                df=self.df,
+                forecast_df=forecast_df, 
+                stock_name=self.stock_name,
+                model_name='SARIMA',
+                model=self
+            )
+            
+            # Create grid search results visualization if available
+            if hasattr(self, 'mse_history') and self.mse_history:
+                plotter.plot_grid_search_results(
+                    self.mse_history, 
+                    self.stock_name, 
+                    'SARIMA'
+                )
+            
+            # Create distribution plot
+            plotter.plot_distribution(self.df, self.stock_name, 'SARIMA')
+                
             return fig
         except Exception as e:
-            print(f"Error creating plot: {str(e)}")
+            print(f"Error creating SARIMA forecast plot: {str(e)}")
             return None
 
-    def plot_focused_forecast(self, forecast_df):
-        """Create and save a focused plot of last 5 days and next 10 days, plus 2 extra days."""
+    def plot_focused_forecast(self, forecast_df, output_dir=None):
+        """
+        Create and save a focused forecast plot for the last 5 days and next 10 days.
+        This method is kept for backwards compatibility but delegates to the TimeSeriesPlotter.
+        
+        Args:
+            forecast_df (pd.DataFrame): Forecast DataFrame.
+            output_dir (str, optional): Directory to save the plot. Defaults to None.
+        """
         try:
-            fig = go.Figure()
-            
-            # Get last 5 days of historical data
-            last_5_days = self.df.tail(5)
-            
-            # Plot historical data as black dots
-            fig.add_trace(go.Scatter(
-                x=last_5_days['ds'],
-                y=last_5_days['y'],
-                name='Historical Data',
-                mode='markers',
-                marker=dict(color='black', size=8)
-            ))
-
-            # Last known date from historical data
-            last_date = self.df['ds'].iloc[-1]
-            
-            # Get 10 days of business days for the forecast
-            forecast_dates = pd.date_range(
-                start=last_date + pd.Timedelta(days=1),
-                periods=10,
-                freq='B'  # Business days
+            # Use the unified plotter - note this is now called from plot_forecast
+            output_dir = output_dir or self.output_dir
+            plotter = TimeSeriesPlotter(output_dir=output_dir)
+            return plotter.plot_focused_forecast(
+                df=self.df,
+                forecast_df=forecast_df, 
+                stock_name=self.stock_name,
+                model_name='SARIMA',
+                model=self
             )
-            
-            # Create a complete blue line that includes both historical fitted values and forecasts
-            if self.model is not None:
-                # For historical dates: get fitted values from the model for the last 5 days
-                fitted_values = None
-                if hasattr(self, 'results') and self.results is not None:
-                    # Try to get fitted values from the fitted model
-                    try:
-                        # Get fitted values for the historical period
-                        fitted_values = self.results.fittedvalues[-5:]
-                    except:
-                        pass
-                
-                # If we couldn't get fitted values from results, use the model to predict on historical data
-                if fitted_values is None:
-                    try:
-                        # Use the last 5 days indices to predict historical values
-                        fitted_values = self.model.predict(start=len(self.df)-5, end=len(self.df)-1)
-                    except:
-                        # If that fails, use the forecast values for those dates (less accurate)
-                        fitted_indices = forecast_df[forecast_df['ds'].isin(last_5_days['ds'])]
-                        if not fitted_indices.empty:
-                            fitted_values = fitted_indices['yhat'].values
-                        else:
-                            # Default to the actual values if we can't get predictions
-                            fitted_values = last_5_days['y'].values
-                
-                # Generate a fresh 10-day forecast
-                forecast_values = self.model.forecast(10)
-                
-                # Combine historical fitted values with forecast
-                all_dates = list(last_5_days['ds']) + list(forecast_dates)
-                all_values = list(fitted_values) + list(forecast_values)
-                
-                # Create a DataFrame with all dates and values for the blue line
-                line_data = pd.DataFrame({
-                    'ds': all_dates,
-                    'yhat': all_values
-                })
-            else:
-                # Use the provided forecast DataFrame
-                # Extract fitted values for historical period
-                historical_fitted = forecast_df[forecast_df['ds'].isin(last_5_days['ds'])].copy()
-                
-                # Extract forecast values for future dates
-                future_forecast = forecast_df[forecast_df['ds'] > last_date].head(10).copy()
-                
-                # If we don't have enough forecast days, pad with additional days
-                if len(future_forecast) < 10:
-                    missing_days = 10 - len(future_forecast)
-                    last_forecast_date = future_forecast['ds'].iloc[-1] if len(future_forecast) > 0 else last_date
-                    
-                    # Generate missing dates
-                    missing_dates = pd.date_range(
-                        start=last_forecast_date + pd.Timedelta(days=1),
-                        periods=missing_days,
-                        freq='B'  # Business days
-                    )
-                    
-                    # Create DataFrame with missing dates
-                    missing_df = pd.DataFrame({
-                        'ds': missing_dates,
-                        'yhat': [future_forecast['yhat'].iloc[-1]] * missing_days if len(future_forecast) > 0 else [np.nan] * missing_days
-                    })
-                    
-                    # Add the missing days
-                    future_forecast = pd.concat([future_forecast, missing_df], ignore_index=True)
-                
-                # Combine historical and future data for a continuous line
-                line_data = pd.concat([historical_fitted, future_forecast], ignore_index=True)
-                
-                # If we don't have historical fitted values, use actual values
-                if len(historical_fitted) == 0:
-                    historical_as_fitted = pd.DataFrame({
-                        'ds': last_5_days['ds'],
-                        'yhat': last_5_days['y']
-                    })
-                    line_data = pd.concat([historical_as_fitted, future_forecast], ignore_index=True)
-            
-            # Sort by date to ensure continuous line
-            line_data = line_data.sort_values('ds')
-            
-            # Add 2 extra days with no data
-            last_forecast_date = line_data['ds'].iloc[-1]
-            extra_dates = pd.date_range(
-                start=last_forecast_date + pd.Timedelta(days=1),
-                periods=2,
-                freq='B'  # Business days
-            )
-            
-            # Plot the continuous blue line (historical fitted + forecast)
-            fig.add_trace(go.Scatter(
-                x=line_data['ds'],
-                y=line_data['yhat'],
-                name='Model Fit & Forecast',
-                mode='lines',
-                line=dict(color='blue', width=2)
-            ))
-
-            # Add last known price point highlighted
-            last_known_price = self.df['y'].iloc[-1]
-            last_known_date = self.df['ds'].iloc[-1]
-            fig.add_trace(go.Scatter(
-                x=[last_known_date],
-                y=[last_known_price],
-                name='Last Known Price',
-                mode='markers',
-                marker=dict(size=10, color='red')
-            ))
-
-            # Set the x-axis range to include the 2 extra days
-            all_viz_dates = list(last_5_days['ds']) + list(line_data['ds']) + list(extra_dates)
-            min_date = min(all_viz_dates)
-            max_date = max(all_viz_dates)
-
-            fig.update_layout(
-                title=f'{self.stock_name} Stock Price - 12-Day Window<br>SARIMA Model',
-                xaxis_title='Date',
-                yaxis_title='Stock Price ($)',
-                showlegend=True,
-                xaxis=dict(
-                    range=[min_date, max_date],
-                    tickangle=45,
-                    tickformat='%Y-%m-%d'
-                )
-            )
-
-            if self.output_dir:
-                plot_path = os.path.join(
-                    self.output_dir, 
-                    f'{self.stock_name}_sarima_focused_forecast.png'
-                )
-                fig.write_image(plot_path)
-                print(f"Focused plot saved: {plot_path}")
-
-            return fig
         except Exception as e:
-            print(f"Error creating focused plot: {str(e)}")
+            print(f"Error creating SARIMA focused forecast plot: {str(e)}")
             return None
 
     def save_mse_history(self):

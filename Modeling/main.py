@@ -22,6 +22,7 @@ Metrics:
 from prophet_timeseries import ProphetTimeSeriesModel
 from sarima_timeseries import SarimaTimeSeriesModel
 from theta_timeseries import ThetaTimeSeriesModel
+from visualizations import TimeSeriesPlotter
 import os
 import pandas as pd
 import numpy as np
@@ -103,6 +104,9 @@ class StockModelComparison:
                 # Set model-specific output directory
                 model.output_dir = os.path.join(self.output_dir, model_name)
                 
+                # Create unified plotter
+                plotter = TimeSeriesPlotter(output_dir=model.output_dir)
+                
                 # Run model
                 model.prepare_data()
                 model.train_model()
@@ -129,8 +133,11 @@ class StockModelComparison:
                     'forecast_std': forecast['yhat'].std()
                 }
                 
-                # Generate and save plot
-                model.plot_forecast(forecast)
+                # Generate and save plots using the unified plotter
+                plotter.plot_forecast(model.df, forecast, stock_symbol, model_name, mse)
+                plotter.plot_focused_forecast(model.df, forecast, stock_symbol, model_name)
+                plotter.plot_distribution(model.df, stock_symbol, model_name)
+                
                 print(f"Completed {model_name} model for {stock_symbol} with MSE: {mse:.4f}, RMSE: {rmse:.4f}")
 
             except Exception as e:
@@ -141,6 +148,11 @@ class StockModelComparison:
 
     def create_summary_report(self, summary_data):
         """Create and save summary report."""
+        # Check if summary_data is empty
+        if not summary_data:
+            print("No data to create summary report")
+            return
+            
         # Convert to DataFrame
         df_summary = pd.DataFrame(summary_data)
         
@@ -169,8 +181,10 @@ class StockModelComparison:
 def main():
     # Set up paths
     data_dir = "Data"  # Directory containing price_collection.py output
-    output_dir = "Output"  # Directory for model outputs
     
+    # Create dated output directory
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    output_dir = os.path.join("Output", timestamp)  # Directory for model outputs with timestamp
     
     # Initialize and run comparison
     comparison = StockModelComparison(data_dir, output_dir)

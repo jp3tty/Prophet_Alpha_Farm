@@ -34,14 +34,19 @@ def test_prophet_model():
             
             if model.model is not None:
                 # If a suitable model was found with MSE < 15.0
-                forecast = model.make_predictions(periods=5)
+                forecast = model.make_predictions(periods=10)
                 
                 # Calculate metrics
                 train_mse, train_rmse = model.calculate_mse(forecast, is_training=True)
                 pred_mse, pred_rmse = model.calculate_mse(forecast, is_training=False)
                 
-                # Create plot silently
-                model.plot_forecast(forecast)
+                # Create plots
+                model.create_and_save_plots(forecast)
+                
+                # Display forecast for the next 10 days
+                print("\nForecast for next 10 days:")
+                future_forecast = forecast[forecast['ds'] > model.df['ds'].max()].head(10)
+                print(future_forecast[['ds', 'yhat']].to_string(index=False))
                 
                 # Update progress bar with metrics
                 pbar.set_postfix({
@@ -53,6 +58,8 @@ def test_prophet_model():
                 print(f"\nResults for {model.stock_name}:")
                 print(f"Best parameters: {model.best_params}")
                 print(f"Best MSE: {best_mse:.4f}")
+                print(f"Final MSE: {train_mse:.4f}")
+                print(f"Final RMSE: {train_rmse:.4f}")
             else:
                 print(f"\nNo model found for {csv_file} that beats baseline MSE of 15.0")
             

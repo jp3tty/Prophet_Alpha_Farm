@@ -28,6 +28,8 @@ import plotly.graph_objects as go
 import os
 from itertools import product
 from tqdm import tqdm
+from statsmodels.tsa.forecasting.theta import ThetaModel
+from visualizations import TimeSeriesPlotter
 
 class ThetaTimeSeriesModel(BaseTimeSeriesModel):
     def __init__(self, csv_path):
@@ -83,9 +85,9 @@ class ThetaTimeSeriesModel(BaseTimeSeriesModel):
                 long_ma = pd.Series(values).rolling(window=window*2, center=True).mean()
                 short_ma = pd.Series(values).rolling(window=window, center=True).mean()
                 
-                # Fill NaN values
-                long_ma = long_ma.fillna(method='bfill').fillna(method='ffill')
-                short_ma = short_ma.fillna(method='bfill').fillna(method='ffill')
+                # Fill NaN values - using bfill() and ffill() instead of fillna(method=)
+                long_ma = long_ma.bfill().ffill()
+                short_ma = short_ma.bfill().ffill()
                 
                 # Calculate trend
                 trend = long_ma + theta * (short_ma - long_ma)
@@ -93,7 +95,7 @@ class ThetaTimeSeriesModel(BaseTimeSeriesModel):
                 # Calculate seasonal pattern
                 seasonal = values / trend
                 seasonal = pd.Series(seasonal).rolling(window=seasonal_window, center=True).mean()
-                seasonal = seasonal.fillna(method='bfill').fillna(method='ffill')
+                seasonal = seasonal.bfill().ffill()
                 
                 # Fit trend model
                 X = np.arange(len(values)).reshape(-1, 1)
@@ -226,9 +228,9 @@ class ThetaTimeSeriesModel(BaseTimeSeriesModel):
             long_ma = pd.Series(values).rolling(window=window*2, center=True).mean()
             short_ma = pd.Series(values).rolling(window=window, center=True).mean()
             
-            # Fill NaN values
-            long_ma = long_ma.fillna(method='bfill').fillna(method='ffill')
-            short_ma = short_ma.fillna(method='bfill').fillna(method='ffill')
+            # Fill NaN values - using bfill() and ffill() instead of fillna(method=)
+            long_ma = long_ma.bfill().ffill()
+            short_ma = short_ma.bfill().ffill()
             
             # Calculate trend
             trend = long_ma + theta * (short_ma - long_ma)
@@ -236,7 +238,7 @@ class ThetaTimeSeriesModel(BaseTimeSeriesModel):
             # Calculate seasonal pattern
             seasonal = values / trend
             seasonal = pd.Series(seasonal).rolling(window=seasonal_window, center=True).mean()
-            seasonal = seasonal.fillna(method='bfill').fillna(method='ffill')
+            seasonal = seasonal.bfill().ffill()
             
             # Fit trend model
             X = np.arange(len(values)).reshape(-1, 1)
@@ -250,22 +252,21 @@ class ThetaTimeSeriesModel(BaseTimeSeriesModel):
             recent_seasonal = seasonal[-seasonal_window:].mean()
             
             # Generate final forecast
-            forecast = trend_forecast * recent_seasonal
+            forecast_values = trend_forecast * recent_seasonal
             
+            # Return model parameters
             return {
-                'theta': theta,
                 'window_size': window,
-                'decomposition_type': params['decomposition_type'],
+                'theta': theta,
                 'trend_degree': trend_degree,
                 'seasonal_window': seasonal_window,
-                'forecast': forecast,
+                'decomposition_type': params['decomposition_type'],
                 'trend_model': trend_model,
-                'seasonal': seasonal
+                'seasonal_factor': recent_seasonal
             }
-            
         except Exception as e:
             print(f"Error fitting model: {str(e)}")
-            return None
+            raise e
 
     def make_predictions(self, periods=5, model=None):
         """Generate predictions for the specified number of periods."""
@@ -287,9 +288,9 @@ class ThetaTimeSeriesModel(BaseTimeSeriesModel):
         long_ma = pd.Series(values).rolling(window=window_size*2, center=True).mean()
         short_ma = pd.Series(values).rolling(window=window_size, center=True).mean()
         
-        # Fill NaN values
-        long_ma = long_ma.fillna(method='bfill').fillna(method='ffill')
-        short_ma = short_ma.fillna(method='bfill').fillna(method='ffill')
+        # Fill NaN values - using bfill() and ffill() instead of fillna(method=)
+        long_ma = long_ma.bfill().ffill()
+        short_ma = short_ma.bfill().ffill()
         
         # Calculate trend
         trend = long_ma + theta * (short_ma - long_ma)
@@ -297,7 +298,7 @@ class ThetaTimeSeriesModel(BaseTimeSeriesModel):
         # Calculate seasonal pattern
         seasonal = values / trend
         seasonal = pd.Series(seasonal).rolling(window=seasonal_window, center=True).mean()
-        seasonal = seasonal.fillna(method='bfill').fillna(method='ffill')
+        seasonal = seasonal.bfill().ffill()
         
         # Fit trend model with historical data
         X_hist = np.arange(len(values)).reshape(-1, 1)
@@ -347,119 +348,63 @@ class ThetaTimeSeriesModel(BaseTimeSeriesModel):
 
         return self.forecast
 
-    def plot_forecast(self, forecast_df):
-        """Create and save forecast plot."""
+    def plot_forecast(self, forecast_df, output_dir=None):
+        """
+        Create and save a forecast plot for the stock price.
+        
+        Args:
+            forecast_df (pd.DataFrame): Forecast DataFrame.
+            output_dir (str, optional): Directory to save the plot. Defaults to None.
+        """
         try:
-            # Create full plot
-            fig = go.Figure()
-
-            # Plot historical data (last 60 days for better visualization)
-            historical_data = self.df.tail(60)
-            fig.add_trace(go.Scatter(
-                x=historical_data['ds'],
-                y=historical_data['y'],
-                name='Historical Data',
-                mode='lines'
-            ))
-
-            # Plot forecast
-            fig.add_trace(go.Scatter(
-                x=forecast_df['ds'],
-                y=forecast_df['yhat'],
-                name='Forecast',
-                mode='lines+markers',
-                line=dict(dash='dash')
-            ))
-
-            # Add last known price point
-            last_known_price = self.df['y'].iloc[-1]
-            last_known_date = self.df['ds'].iloc[-1]
-            fig.add_trace(go.Scatter(
-                x=[last_known_date],
-                y=[last_known_price],
-                name='Last Known Price',
-                mode='markers',
-                marker=dict(size=10, color='red')
-            ))
-
-            fig.update_layout(
-                title=f'{self.stock_name} Stock Price Forecast - Theta Model<br>MSE: {self.best_mse:.4f}',
-                xaxis_title='Date',
-                yaxis_title='Stock Price ($)',
-                showlegend=True
-            )
-
-            if self.output_dir:
-                plot_path = os.path.join(
-                    self.output_dir, 
-                    f'{self.stock_name}_theta_forecast.png'
-                )
-                fig.write_image(plot_path)
-                print(f"Plot saved: {plot_path}")
-
-            # Create focused plot
-            self.plot_focused_forecast(forecast_df)
+            # Use the unified plotter for creating plots
+            output_dir = output_dir or self.output_dir
+            plotter = TimeSeriesPlotter(output_dir=output_dir)
             
-            return fig
-        except Exception as e:
-            print(f"Error creating plot: {str(e)}")
-            return None
-
-    def plot_focused_forecast(self, forecast_df):
-        """Create and save a focused plot of last 5 days and next 5 days."""
-        try:
-            fig = go.Figure()
-
-            # Plot last 5 days of historical data
-            last_5_days = self.df.tail(5)
-            fig.add_trace(go.Scatter(
-                x=last_5_days['ds'],
-                y=last_5_days['y'],
-                name='Last 5 Days',
-                mode='lines+markers',
-                line=dict(color='blue')
-            ))
-
-            # Plot next 5 days forecast
-            fig.add_trace(go.Scatter(
-                x=forecast_df['ds'],
-                y=forecast_df['yhat'],
-                name='Next 5 Days',
-                mode='lines+markers',
-                line=dict(dash='dash', color='red')
-            ))
-
-            # Add last known price point
-            last_known_price = self.df['y'].iloc[-1]
-            last_known_date = self.df['ds'].iloc[-1]
-            fig.add_trace(go.Scatter(
-                x=[last_known_date],
-                y=[last_known_price],
-                name='Last Known Price',
-                mode='markers',
-                marker=dict(size=10, color='red')
-            ))
-
-            fig.update_layout(
-                title=f'{self.stock_name} Stock Price - Last 5 Days & Next 5 Days<br>Theta Model',
-                xaxis_title='Date',
-                yaxis_title='Stock Price ($)',
-                showlegend=True,
-                xaxis=dict(
-                    tickangle=45,
-                    tickformat='%Y-%m-%d'
-                )
+            # Generate the main forecast plot
+            fig = plotter.plot_forecast(
+                df=self.df,
+                forecast_df=forecast_df,
+                stock_name=self.stock_name,
+                model_name='Theta',
+                mse=self.best_mse
             )
-
-            if self.output_dir:
-                plot_path = os.path.join(
-                    self.output_dir, 
-                    f'{self.stock_name}_theta_focused_forecast.png'
-                )
-                fig.write_image(plot_path)
-                print(f"Focused plot saved: {plot_path}")
-
+            
+            # Generate the focused forecast plot
+            plotter.plot_focused_forecast(
+                df=self.df,
+                forecast_df=forecast_df, 
+                stock_name=self.stock_name,
+                model_name='Theta'
+            )
+            
+            # Create distribution plot
+            plotter.plot_distribution(self.df, self.stock_name, 'Theta')
+                
             return fig
         except Exception as e:
-            print(f"Error creating focused plot: {str(e)}")
+            print(f"Error creating Theta forecast plot: {str(e)}")
+            return None
+    
+    def plot_focused_forecast(self, forecast_df, output_dir=None):
+        """
+        Create and save a focused forecast plot for the last 5 days and next 10 days.
+        This method is kept for backwards compatibility but delegates to the TimeSeriesPlotter.
+        
+        Args:
+            forecast_df (pd.DataFrame): Forecast DataFrame.
+            output_dir (str, optional): Directory to save the plot. Defaults to None.
+        """
+        try:
+            # Use the unified plotter - note this is now called from plot_forecast
+            output_dir = output_dir or self.output_dir
+            plotter = TimeSeriesPlotter(output_dir=output_dir)
+            return plotter.plot_focused_forecast(
+                df=self.df,
+                forecast_df=forecast_df, 
+                stock_name=self.stock_name,
+                model_name='Theta'
+            )
+        except Exception as e:
+            print(f"Error creating Theta focused forecast plot: {str(e)}")
             return None

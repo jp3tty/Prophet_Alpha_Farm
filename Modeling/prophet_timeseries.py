@@ -32,7 +32,8 @@ import os
 import plotly.graph_objects as go
 from prophet.plot import plot_plotly, plot_components_plotly
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
+from visualizations import TimeSeriesPlotter
 
 # Suppress cmdstanpy logging
 logging.getLogger('cmdstanpy').setLevel(logging.ERROR)
@@ -221,75 +222,70 @@ class ProphetTimeSeriesModel(BaseTimeSeriesModel):
             
             print(f"Plots saved with timestamp: {timestamp}")
 
-    def plot_focused_forecast(self, forecast_df):
-        """Create a focused plot of last 5 days and next 5 days."""
+    def plot_forecast(self, forecast_df, output_dir=None):
+        """
+        Create and save a forecast plot for the stock price.
+        
+        Args:
+            forecast_df (pd.DataFrame): Forecast DataFrame from Prophet.
+            output_dir (str, optional): Directory to save the plot. Defaults to None.
+        """
         try:
-            fig = go.Figure()
-
-            # Plot last 5 days of historical data
-            last_5_days = self.df.tail(5)
-            fig.add_trace(go.Scatter(
-                x=last_5_days['ds'],
-                y=last_5_days['y'],
-                name='Historical Data',
-                mode='markers',
-                marker=dict(color='black', size=5)
-            ))
-
-            # Plot next 5 days forecast
-            next_5_days = forecast_df[forecast_df['ds'] > self.df['ds'].max()].head(5)
-            fig.add_trace(go.Scatter(
-                x=next_5_days['ds'],
-                y=next_5_days['yhat'],
-                name='Forecast',
-                mode='lines',
-                line=dict(color='blue', width=2)
-            ))
+            # Use the unified plotter for creating plots
+            plotter = TimeSeriesPlotter(output_dir=output_dir or self.output_dir)
             
-            # Add confidence intervals if available
-            if 'yhat_lower' in forecast_df.columns and 'yhat_upper' in forecast_df.columns:
-                fig.add_trace(go.Scatter(
-                    x=next_5_days['ds'],
-                    y=next_5_days['yhat_upper'],
-                    mode='lines',
-                    line=dict(width=0),
-                    showlegend=False
-                ))
-                fig.add_trace(go.Scatter(
-                    x=next_5_days['ds'],
-                    y=next_5_days['yhat_lower'],
-                    mode='lines',
-                    line=dict(width=0),
-                    fill='tonexty',
-                    fillcolor='rgba(68, 68, 255, 0.2)',
-                    name='Confidence Interval'
-                ))
-
-            # Add last known price point
-            last_known_price = self.df['y'].iloc[-1]
-            last_known_date = self.df['ds'].iloc[-1]
-            fig.add_trace(go.Scatter(
-                x=[last_known_date],
-                y=[last_known_price],
-                name='Last Known Price',
-                mode='markers',
-                marker=dict(size=10, color='red')
-            ))
-
-            fig.update_layout(
-                title=f'{self.stock_name} Stock Price - Last 5 Days & Next 5 Days<br>Prophet Model',
-                xaxis_title='Date',
-                yaxis_title='Stock Price ($)',
-                showlegend=True,
-                xaxis=dict(
-                    tickangle=45,
-                    tickformat='%Y-%m-%d'
-                )
+            # Generate the main forecast plot
+            fig = plotter.plot_forecast(
+                df=self.df,
+                forecast_df=forecast_df,
+                stock_name=self.stock_name,
+                model_name='Prophet',
+                mse=self.mse
             )
-
+            
+            # Generate the focused forecast plot
+            plotter.plot_focused_forecast(
+                df=self.df,
+                forecast_df=forecast_df, 
+                stock_name=self.stock_name,
+                model_name='Prophet'
+            )
+            
+            # Also create and save the components plot
+            if hasattr(self, 'model') and self.model is not None:
+                # Generate components plot using Prophet's built-in function
+                components_fig = plot_components_plotly(self.model, forecast_df)
+                components_fig.update_layout(title=f'{self.stock_name} Stock Price Components - Prophet Model')
+                plotter.plot_components(components_fig, self.stock_name, 'Prophet')
+            
+            # Create distribution plot
+            plotter.plot_distribution(self.df, self.stock_name, 'Prophet')
+                
             return fig
         except Exception as e:
-            print(f"Error creating focused forecast plot: {str(e)}")
+            print(f"Error creating Prophet forecast plot: {str(e)}")
+            return None
+    
+    def plot_focused_forecast(self, forecast_df, output_dir=None):
+        """
+        Create and save a focused forecast plot for the last 5 days and next 10 days.
+        This method is kept for backwards compatibility but delegates to the TimeSeriesPlotter.
+        
+        Args:
+            forecast_df (pd.DataFrame): Forecast DataFrame from Prophet.
+            output_dir (str, optional): Directory to save the plot. Defaults to None.
+        """
+        try:
+            # Use the unified plotter - note this is now called from plot_forecast
+            plotter = TimeSeriesPlotter(output_dir=output_dir or self.output_dir)
+            return plotter.plot_focused_forecast(
+                df=self.df,
+                forecast_df=forecast_df, 
+                stock_name=self.stock_name,
+                model_name='Prophet'
+            )
+        except Exception as e:
+            print(f"Error creating Prophet focused forecast plot: {str(e)}")
             return None
 
     def save_mse_history(self):
