@@ -179,12 +179,21 @@ class StockModelComparison:
             print(f"Last Known Price: ${stock_data.iloc[0]['Last Price']:.2f}")
 
 def main():
-    # Set up paths
-    data_dir = "Data"  # Directory containing price_collection.py output
+    # Get the absolute path to the current script
+    script_dir = os.path.dirname(os.path.abspath(__file__))
     
-    # Create dated output directory
+    # Get the project root directory (parent of the script directory)
+    project_root = os.path.dirname(script_dir)
+    
+    # Set up paths
+    data_dir = os.path.join(project_root, "Data")  # Data directory at project root
+    
+    # Create dated output directory at project root
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    output_dir = os.path.join("Output", timestamp)  # Directory for model outputs with timestamp
+    output_dir = os.path.join(project_root, "Output", timestamp)  # Directory for model outputs with timestamp
+    
+    print(f"Data directory: {data_dir}")
+    print(f"Output directory: {output_dir}")
     
     # Initialize and run comparison
     comparison = StockModelComparison(data_dir, output_dir)

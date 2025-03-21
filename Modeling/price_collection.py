@@ -41,13 +41,14 @@ def get_stock_prices(symbol, period='1y'):
         print(f"Error fetching price data for {symbol}: {str(e)}")
         return pd.DataFrame()
 
-def save_to_csv(price_data, symbol):
+def save_to_csv(price_data, symbol, data_dir):
     """
     Save price data to a CSV file.
     
     Args:
         price_data (pandas.DataFrame): DataFrame with price data
         symbol (str): Stock symbol for filename
+        data_dir (str): Directory to save data files
     """
     if price_data.empty:
         print(f"No price data to save for {symbol}")
@@ -55,10 +56,10 @@ def save_to_csv(price_data, symbol):
         
     try:
         # Create Data directory if it doesn't exist
-        os.makedirs('Data', exist_ok=True)
+        os.makedirs(data_dir, exist_ok=True)
         
-        # Create filename with current date
-        filename = f"Data/{symbol}_prices.csv"
+        # Create filename with symbol
+        filename = os.path.join(data_dir, f"{symbol}_prices.csv")
         
         # Save to CSV
         price_data.to_csv(filename, index=False)
@@ -100,6 +101,17 @@ def get_user_symbols():
 def main():
     print("Welcome to the stock price data collector!")
     
+    # Get the absolute path to the current script
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    
+    # Get the project root directory (parent of the script directory)
+    project_root = os.path.dirname(script_dir)
+    
+    # Set data directory to project root/Data
+    data_dir = os.path.join(project_root, "Data")
+    
+    print(f"Data will be saved to: {data_dir}")
+    
     # Get symbols from user instead of using predefined list
     ticker_symbols = get_user_symbols()
     print(f"\nStarting price data collection for {len(ticker_symbols)} symbols...")
@@ -112,7 +124,7 @@ def main():
         price_data = get_stock_prices(symbol)
         
         # Save to CSV and track success
-        if save_to_csv(price_data, symbol):
+        if save_to_csv(price_data, symbol, data_dir):
             successful_saves += 1
         
         # Add a small delay to avoid overwhelming the server
@@ -124,9 +136,9 @@ def main():
     # List all saved files
     if successful_saves > 0:
         print("\nSaved files:")
-        for filename in os.listdir('Data'):
+        for filename in os.listdir(data_dir):
             if filename.endswith('_prices.csv'):
-                filepath = os.path.join('Data', filename)
+                filepath = os.path.join(data_dir, filename)
                 size = os.path.getsize(filepath)
                 print(f"- {filename} ({size} bytes)")
 
