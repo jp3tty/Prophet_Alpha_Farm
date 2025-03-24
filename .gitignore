@@ -26,9 +26,34 @@ Thumbs.db
 
 # Output files
 Output/
+**/Output/
+**/predictions_output/
+
+# Data files
+Data/
+**/Data/
+**/Test/
+
+# Model outputs
+**/Prophet/
+**/SARIMA/
+**/Theta/
+**/Viz_Test/
+
+# Saved model files
+*.pkl
+*.joblib
+*.h5
 
 # Large media files
 *.mp4
 *.mov
 *.pdf
-*.zip 
+*.zip
+
+# Result files from scripts
+model_comparison_summary_*.csv
+*_forecast.png
+*_focused_forecast.png
+*_distribution_*.png
+*_predictions.csv 
