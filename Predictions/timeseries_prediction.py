@@ -36,6 +36,9 @@ class StockPredictor:
             # Get only the future predictions
             future_forecast = forecast.tail(days)
             
+            # Get the last known price from historical data
+            last_known_price = self.model.history['y'].iloc[-1]
+            
             # Format results
             results = pd.DataFrame({
                 'Date': future_forecast['ds'],
@@ -44,7 +47,7 @@ class StockPredictor:
                 'Upper_Bound': future_forecast['yhat_upper']
             })
             
-            return results
+            return results, last_known_price
         else:
             raise ValueError(f"Prediction not implemented for model type: {self.model_type}")
     
@@ -145,6 +148,7 @@ def main():
         mses = []
         all_dates = []
         all_predictions_by_stock = {}
+        last_known_prices = {}  # New dictionary to store last known prices
         
         # Process predictions for each stock's latest model
         for stock_prefix, model_path in latest_models.items():
@@ -156,7 +160,7 @@ def main():
             
             predictor = StockPredictor(model_path, model_type='Prophet', mse_value=mse_value)
             predictor.load_model()
-            predictions = predictor.make_predictions(days=5)
+            predictions, last_known_price = predictor.make_predictions(days=5)
             
             # Round prediction values to 2 decimal places
             predictions['Predicted_Price'] = predictions['Predicted_Price'].round(2)
@@ -175,6 +179,9 @@ def main():
             # Store predictions by date for this stock
             all_predictions_by_stock[stock_prefix] = predictions['Predicted_Price'].tolist()
             
+            # Store last known price
+            last_known_prices[stock_prefix] = last_known_price
+            
             # Print results
             predictor.print_predictions(predictions)
         
@@ -185,7 +192,8 @@ def main():
             row_data = {
                 'Stock': stock,
                 'Model': models[i],
-                'MSE': mses[i]
+                'MSE': mses[i],
+                'Last_Known_Price': f"${last_known_prices[stock]:.2f}"  # Add last known price
             }
             
             # Add the predictions for each date
