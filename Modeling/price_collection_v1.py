@@ -76,6 +76,7 @@ def save_to_csv(price_data, symbol, data_dir):
         print(f"Error saving data for {symbol}: {str(e)}")
         return False
 
+# Replace the TICKER_SYMBOLS list with a function to get user input
 def get_user_symbols():
     """
     Prompt user to enter stock symbols they want to analyze.
@@ -97,7 +98,7 @@ def get_user_symbols():
     
     return symbols
 
-def main(symbols_list=None):
+def main():
     print("Welcome to the stock price data collector!")
     
     # Get the absolute path to the current script
@@ -111,14 +112,9 @@ def main(symbols_list=None):
     
     print(f"Data will be saved to: {data_dir}")
     
-    # Use provided symbols list or get from user input
-    if symbols_list is not None:
-        ticker_symbols = [symbol.strip().upper() for symbol in symbols_list]
-        print(f"\nUsing provided list of {len(ticker_symbols)} symbols: {', '.join(ticker_symbols)}")
-    else:
-        ticker_symbols = get_user_symbols()
-        print(f"\nStarting price data collection for {len(ticker_symbols)} symbols...")
-    
+    # Get symbols from user instead of using predefined list
+    ticker_symbols = get_user_symbols()
+    print(f"\nStarting price data collection for {len(ticker_symbols)} symbols...")
     successful_saves = 0
     
     for symbol in ticker_symbols:
@@ -147,4 +143,4 @@ def main(symbols_list=None):
                 print(f"- {filename} ({size} bytes)")
 
 if __name__ == "__main__":
-    main()  # Run without parameters to use interactive input
+    main()
